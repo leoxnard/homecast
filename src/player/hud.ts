@@ -33,6 +33,22 @@ export interface HudState {
   chapters: Chapter[];
 }
 
+/**
+ * Two labels per button: the full wording on a roomy screen, a short one on a
+ * phone. CSS picks; nothing recomputes on resize.
+ */
+const label = (full: string, short: string): DocumentFragment => {
+  const frag = document.createDocumentFragment();
+  const a = document.createElement("span");
+  a.className = "label-full";
+  a.textContent = full;
+  const b = document.createElement("span");
+  b.className = "label-short";
+  b.textContent = short;
+  frag.append(a, b);
+  return frag;
+};
+
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -70,15 +86,20 @@ export class Hud {
     const top = el("div", "hud-top");
     this.titleEl = el("div", "hud-title", "No file open");
     this.chapterLabel = el("div", "hud-chapter");
-    const libraryBtn = el("button", "btn", "Library");
+    const libraryBtn = el("button", "btn");
+    libraryBtn.append(label("Library", "Library"));
     libraryBtn.addEventListener("click", () => this.cb.onShowLibrary());
-    const chaptersBtn = el("button", "btn", "Chapters");
+    const chaptersBtn = el("button", "btn");
+    chaptersBtn.append(label("Chapters", "Marks"));
     chaptersBtn.addEventListener("click", () => this.cb.onShowChapters());
-    this.roomBtn = el("button", "btn", "Watch together");
+    this.roomBtn = el("button", "btn");
+    this.roomBtn.append(label("Watch together", "Room"));
     this.roomBtn.addEventListener("click", () => this.cb.onShowRoom());
-    const openBtn = el("button", "btn", "Open file");
+    const openBtn = el("button", "btn");
+    openBtn.append(label("Open file", "Open"));
     openBtn.addEventListener("click", () => this.cb.onOpenFile());
-    const fsBtn = el("button", "btn", "Fullscreen");
+    const fsBtn = el("button", "btn");
+    fsBtn.append(label("Fullscreen", "⛶"));
     fsBtn.addEventListener("click", () => this.cb.onToggleFullscreen());
     const topRight = el("div", "hud-top-right");
     topRight.append(this.roomBtn, libraryBtn, chaptersBtn, openBtn, fsBtn);
@@ -106,7 +127,8 @@ export class Hud {
     this.timeEl = el("div", "time", "0:00 / 0:00");
     bottom.append(this.playBtn, this.track, this.timeEl);
 
-    this.root.append(top, right, bottom);
+    const fill = el("div", "hud-fill");
+    this.root.append(top, right, fill, bottom);
   }
 
   private bindScrub(): void {
@@ -181,12 +203,16 @@ export class Hud {
 
   /** Reflect room state on the toolbar button, so it is visible while watching. */
   setRoom(code: string, status?: string, peers = 0): void {
+    const full = this.roomBtn.querySelector(".label-full");
+    const short = this.roomBtn.querySelector(".label-short");
     if (!code) {
-      this.roomBtn.textContent = "Watch together";
+      if (full) full.textContent = "Watch together";
+      if (short) short.textContent = "Room";
       this.roomBtn.classList.remove("live");
       return;
     }
-    this.roomBtn.textContent = peers ? `${code} · ${peers} connected` : `${code} · waiting`;
+    if (full) full.textContent = peers ? `${code} · ${peers} connected` : `${code} · waiting`;
+    if (short) short.textContent = peers ? `${code}·${peers}` : code;
     this.roomBtn.classList.toggle("live", peers > 0);
     if (status) this.roomBtn.title = status;
   }

@@ -33,6 +33,10 @@ export class Controls {
   private lastY = 0;
   private pointerId?: number;
   private readonly disposers: Array<() => void> = [];
+  /** Live touch points, for pinch-to-zoom (there is no wheel on a phone). */
+  private readonly touches = new Map<number, { x: number; y: number }>();
+  private pinchStartDistance = 0;
+  private pinchStartFov = 0;
 
   private readonly viewer: Viewer;
   private readonly element: HTMLElement;
@@ -53,16 +57,42 @@ export class Controls {
     const el = this.element;
 
     const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "touch") this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // A second finger starts a pinch and cancels the drag it would otherwise
+      // be interpreted as.
+      if (this.touches.size === 2) {
+        this.dragging = false;
+        this.pinchStartDistance = this.touchDistance();
+        this.pinchStartFov = this.viewer.fov;
+        return;
+      }
       if (e.button !== 0) return;
       this.dragging = true;
       this.pointerId = e.pointerId;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
-      el.setPointerCapture(e.pointerId);
+      // Throws if the pointer is already gone; not worth losing the drag over.
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture is an optimisation, not a requirement */
+      }
       el.classList.add("dragging");
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerType === "touch" && this.touches.has(e.pointerId)) {
+        this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      if (this.touches.size === 2) {
+        const distance = this.touchDistance();
+        if (this.pinchStartDistance > 0 && distance > 0) {
+          // Spreading fingers narrows the field of view, i.e. zooms in.
+          this.viewer.setFov(this.pinchStartFov * (this.pinchStartDistance / distance), false);
+          this.changed();
+        }
+        return;
+      }
       if (!this.dragging || e.pointerId !== this.pointerId) return;
       const dx = e.clientX - this.lastX;
       const dy = e.clientY - this.lastY;
@@ -76,10 +106,16 @@ export class Controls {
     };
 
     const endDrag = (e: PointerEvent) => {
+      this.touches.delete(e.pointerId);
+      if (this.touches.size < 2) this.pinchStartDistance = 0;
       if (e.pointerId !== this.pointerId) return;
       this.dragging = false;
       this.pointerId = undefined;
-      el.releasePointerCapture?.(e.pointerId);
+      try {
+        el.releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* already released */
+      }
       el.classList.remove("dragging");
     };
 
@@ -158,6 +194,32 @@ export class Controls {
     add(el, "pointercancel", endDrag as EventListener);
     add(el, "wheel", onWheel as EventListener, { passive: false });
     add(window, "keydown", onKeyDown as EventListener);
+    this.bindDoubleTap(el);
+  }
+
+  private touchDistance(): number {
+    const [a, b] = [...this.touches.values()];
+    if (!a || !b) return 0;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  /** Double-tap resets the view, mirroring the R key. */
+  private bindDoubleTap(el: HTMLElement): void {
+    let lastTap = 0;
+    const onTap = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      const now = Date.now();
+      if (now - lastTap < 300 && this.touches.size === 0) {
+        this.viewer.look(0, 0);
+        this.viewer.setFov(100);
+        this.changed();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+      }
+    };
+    el.addEventListener("pointerup", onTap as EventListener);
+    this.disposers.push(() => el.removeEventListener("pointerup", onTap as EventListener));
   }
 
   dispose(): void {

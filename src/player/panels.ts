@@ -38,7 +38,7 @@ export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElemen
   }
 
   const h2 = document.createElement("h2");
-  h2.textContent = "This machine";
+  h2.textContent = "This device";
   const specs = document.createElement("div");
   specs.className = "keys";
   const rows: Array<[string, string]> = [
@@ -64,7 +64,7 @@ export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElemen
   open.addEventListener("click", () => cb.onOpenFile());
   const help = document.createElement("button");
   help.className = "btn";
-  help.textContent = "Keyboard shortcuts";
+  help.textContent = cap.touch ? "How to use it" : "Keyboard shortcuts";
   help.addEventListener("click", () => cb.onShowHelp());
   actions.append(open, help);
 
@@ -92,14 +92,23 @@ const SHORTCUTS: Array<[string, string]> = [
   ["?", "this list"],
 ];
 
-export function helpPanel(onClose: () => void): HTMLElement {
+const GESTURES: Array<[string, string]> = [
+  ["drag", "look around"],
+  ["pinch", "zoom in and out"],
+  ["double-tap", "reset the view"],
+  ["tap ⛶", "fullscreen"],
+  ["tap the bar", "jump to a point"],
+  ["tap a mark", "jump to that chapter"],
+];
+
+export function helpPanel(onClose: () => void, touch = false): HTMLElement {
   const root = panel();
   const h1 = document.createElement("h1");
-  h1.textContent = "Keyboard";
+  h1.textContent = touch ? "How to use it" : "Keyboard";
 
   const keys = document.createElement("div");
   keys.className = "keys";
-  for (const [k, v] of SHORTCUTS) {
+  for (const [k, v] of (touch ? GESTURES : SHORTCUTS)) {
     const kbd = document.createElement("kbd");
     kbd.textContent = k;
     const desc = document.createElement("div");
@@ -108,10 +117,13 @@ export function helpPanel(onClose: () => void): HTMLElement {
   }
 
   const note = document.createElement("p");
-  note.textContent =
-    "Zoom stops are computed from the file's resolution and this window's size: " +
-    "out at 110°, in at 2× upscale. Hold ⌥ to override them. The 1:1 NATIVE badge " +
-    "lights when one source pixel lands on exactly one screen pixel.";
+  note.textContent = touch
+    ? "Zoom stops are computed from the file's resolution and your screen size: out at 110°, " +
+      "in at 2× upscale. The 1:1 NATIVE badge lights when one source pixel lands on exactly " +
+      "one screen pixel."
+    : "Zoom stops are computed from the file's resolution and this window's size: " +
+      "out at 110°, in at 2× upscale. Hold ⌥ to override them. The 1:1 NATIVE badge " +
+      "lights when one source pixel lands on exactly one screen pixel.";
 
   const actions = document.createElement("div");
   actions.className = "actions";

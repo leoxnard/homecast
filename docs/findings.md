@@ -205,3 +205,28 @@ the first implementation had two faults:
 Large gaps still hard-seek — being a second apart is worse than one visible jump.
 Verified: a forced 3 s drift snapped back at once and settled 0.08 s apart with
 the rate at exactly 1.
+
+---
+
+## F12. Absolutely-positioned HUD rows collide on a phone
+
+The HUD was three absolutely-positioned boxes — top bar, view readout at
+`top: 58px`, transport at the bottom. That is fine at 1440 px and wrong at 375 px:
+the toolbar ran off the right edge (Fullscreen entirely off-screen), the title
+wrapped to three lines, and the readout sat on top of the buttons.
+
+The fix was structural rather than a pile of breakpoints: the HUD is now a flex
+**column**, so rows cannot overlap at any width. Breakpoints then only handle
+what genuinely differs on a small screen — shorter button labels, a single-column
+spec list, tighter type.
+
+Three mobile-specific things the desktop build had simply never needed:
+
+- **Safe areas.** Without `viewport-fit=cover` plus `env(safe-area-inset-*)`, the
+  transport sits under the home indicator and the toolbar under the notch.
+- **Pinch-to-zoom.** Zoom was wheel- and key-only, so on a phone there was no way
+  to zoom *at all* — the single most important control in a 360° player, missing.
+  Two-pointer tracking now drives FOV, and double-tap resets the view.
+- **`pointer: coarse`.** Tap targets were sized for a mouse; they now have a
+  40 px minimum, and the library's hover-only remove button is always visible
+  since there is no hover.

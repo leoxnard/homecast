@@ -30,7 +30,9 @@ markers for band/music footage, and the ability to watch in sync with a friend.
 - Physically in Denmark; the home server is in Germany
 
 ### Other viewers
-Apple Silicon Macs, and Windows PCs with modern GPUs. **Not** mobile (see §5.2).
+Apple Silicon Macs, and Windows PCs with modern GPUs. Phones and tablets are not
+the target (see §5.2) but are no longer *broken*: the layout adapts, touch
+gestures work, and the capability probe recommends a 4K rendition.
 
 ---
 
@@ -283,6 +285,13 @@ Consequence for the zoom UI: on a Retina display at fullscreen (3456 device px) 
 *magnifying* ~1.8× at normal FOV. That is enlargement, not compression.
 
 ### 5.2 `MAX_TEXTURE_SIZE` is 4096 on many mobile GPUs
+
+> **Update:** the *page* is now responsive and touch-capable — safe-area insets,
+> a toolbar that fits, pinch-to-zoom, double-tap to reset, and a capability
+> verdict that says plainly that a phone wants the 4K rendition. The texture
+> limit below is unchanged and still decides what a given device can display;
+> what changed is that a phone now gets a usable page and an honest answer
+> instead of a broken layout. 8K on a phone remains a non-goal.
 
 A 7680 px equirect frame **cannot be bound as a texture** on those devices. Not slow —
 impossible. This is why YouTube uses tiled/EAC projections. The M1 Max reports 16384 so

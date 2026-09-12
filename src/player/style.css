@@ -39,20 +39,30 @@ html, body {
   inset: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
+  /* Laid out as a column rather than three absolutely-positioned boxes: at
+     narrow widths the toolbar and the readout used to sit on top of each
+     other. Flow layout cannot overlap. */
+  display: flex;
+  flex-direction: column;
 }
 .hud.hidden { opacity: 0; }
 .hud button, .hud .track { pointer-events: auto; }
 
 .hud-top {
-  position: absolute;
-  top: 0; left: 0; right: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.65), transparent);
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: calc(14px + env(safe-area-inset-top)) calc(18px + env(safe-area-inset-right))
+           14px calc(18px + env(safe-area-inset-left));
+  background: linear-gradient(to bottom, rgba(0,0,0,0.72), transparent);
 }
-.hud-title { font-weight: 600; letter-spacing: 0.01em; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+.hud-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600; letter-spacing: 0.01em; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 .hud-chapter { color: var(--accent); font-family: var(--hud-font); font-size: 12px; }
 .hud-top-right { margin-left: auto; display: flex; gap: 8px; }
 
@@ -70,14 +80,16 @@ html, body {
 .btn.play { min-width: 40px; font-size: 14px; }
 
 .hud-view {
-  position: absolute;
-  top: 58px; right: 18px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
   text-align: right;
+  padding: 0 calc(18px + env(safe-area-inset-right)) 0 18px;
 }
+
+/* Pushes the transport to the bottom without absolute positioning. */
+.hud-fill { flex: 1; min-height: 0; }
 .readout {
   font-family: var(--hud-font);
   font-size: 11px;
@@ -101,12 +113,11 @@ html, body {
 }
 
 .hud-bottom {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px;
+  padding: 18px calc(18px + env(safe-area-inset-right))
+           calc(18px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left));
   background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.45) 55%, transparent);
 }
 .time {
@@ -434,4 +445,77 @@ html, body {
   pointer-events: none;
   z-index: 8;
   filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.8));
+}
+
+
+/* --- responsive: phones --------------------------------------------------- */
+
+.label-short { display: none; }
+
+/* Touch targets: anything tappable gets a comfortable minimum. */
+@media (pointer: coarse) {
+  .btn { padding: 9px 13px; min-height: 40px; }
+  .track { height: 34px; }
+  .chapter-tick { width: 5px; height: 20px; top: 7px; }
+  .card-remove { opacity: 1; }
+}
+
+@media (max-width: 640px) {
+  .label-full { display: none; }
+  .label-short { display: inline; }
+
+  .hud-top {
+    gap: 8px;
+    padding-left: calc(12px + env(safe-area-inset-left));
+    padding-right: calc(12px + env(safe-area-inset-right));
+  }
+  /* Title takes its own line so the buttons keep a full row to themselves. */
+  .hud-title { flex-basis: 100%; font-size: 12px; }
+  .hud-chapter { flex-basis: 100%; order: 3; font-size: 11px; }
+  .hud-top-right { margin-left: 0; width: 100%; justify-content: space-between; gap: 6px; }
+  .btn { padding: 8px 10px; font-size: 12px; }
+
+  .hud-view { padding-top: 6px; }
+  .readout { font-size: 10px; padding: 3px 6px; }
+  /* The second readout line is diagnostics; the first carries the useful part. */
+  .readout.dim { display: none; }
+
+  .hud-bottom { gap: 10px; padding: 12px calc(12px + env(safe-area-inset-right))
+                 calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  .time { font-size: 11px; }
+
+  .panel {
+    width: calc(100% - 20px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    padding: 20px 18px;
+    border-radius: 14px;
+  }
+  .panel h1 { font-size: 17px; }
+  /* Single column: the label column was sizing to its longest value and
+     leaving a tall empty box next to the GPU string. */
+  .keys { grid-template-columns: 1fr; gap: 3px 0; }
+  .keys kbd { justify-self: start; margin-top: 8px; }
+  .panel .actions { flex-wrap: wrap; }
+
+  .library { padding: 16px calc(14px + env(safe-area-inset-right))
+             calc(40px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left)); }
+  .library-grid { grid-template-columns: 1fr; gap: 14px; }
+  .library-header { flex-wrap: wrap; }
+  .library-header h1 { font-size: 18px; }
+
+  .chapter-row { grid-template-columns: 52px 1fr auto auto; gap: 6px; }
+  .chapter-view { display: none; }
+  .room-code { font-size: 27px; }
+  .room-actions { gap: 8px; }
+  .room-link { flex-basis: 100%; }
+}
+
+/* Landscape phone: vertical space is the scarce thing. */
+@media (max-height: 480px) and (pointer: coarse) {
+  .hud-top { padding-top: calc(8px + env(safe-area-inset-top)); padding-bottom: 8px; }
+  .hud-title { flex-basis: auto; }
+  .hud-top-right { width: auto; margin-left: auto; }
+  .hud-bottom { padding-top: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .panel { max-height: calc(100dvh - 16px); padding: 14px 16px; }
 }

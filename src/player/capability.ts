@@ -17,6 +17,7 @@ export interface Capability {
   devicePixelRatio: number;
   wakeLock: boolean;
   filePicker: boolean;
+  touch: boolean;
   verdict: Verdict;
 }
 
@@ -76,6 +77,7 @@ export function probeCapability(): Capability {
     devicePixelRatio: window.devicePixelRatio || 1,
     wakeLock: "wakeLock" in navigator,
     filePicker: "showOpenFilePicker" in window,
+    touch: navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches,
   };
   return { ...cap, verdict: judge(cap) };
 }
@@ -98,7 +100,7 @@ function judge(c: Omit<Capability, "verdict">): Verdict {
         `frame cannot be bound at all — this is a hard limit, not a speed problem.`,
     );
     if (c.maxTextureSize >= 4096) {
-      detail.push("Open a 4K file instead: `homecast fallback <master>` produces 3840×1920.");
+      detail.push("Open a 4K file instead — the homecast fallback command produces 3840×1920.");
       return { level: "degraded", headline: `Open a ≤${c.maxTextureSize} px file on this machine.`, detail };
     }
     return { level: "blocked", headline: "This GPU cannot display 360° video at any useful size.", detail };
@@ -110,10 +112,25 @@ function judge(c: Omit<Capability, "verdict">): Verdict {
         "On Windows this usually means the OS has no registered HEVC decoder.",
     );
     if (c.h264) {
-      detail.push("Open the H.264 fallback instead: `homecast fallback <master>`.");
+      detail.push("Open the H.264 fallback file instead of the master.");
       return { level: "degraded", headline: "Open the H.264 fallback file, not the master.", detail };
     }
     return { level: "blocked", headline: "No usable video decoder found.", detail };
+  }
+
+  // PLAN §5.2: phones are not the target. Recent ones clear the texture limit,
+  // so this is a caveat rather than a refusal — but say it plainly instead of
+  // letting an 8K master stutter and leaving the viewer to guess why.
+  if (c.touch) {
+    detail.push(
+      "Phones and tablets are not what homecast was built for. Panning and pinch-zoom work, " +
+        "but an 8K master can outrun a mobile decoder.",
+    );
+    if (!c.filePicker) {
+      detail.push("This browser cannot remember files, so you will pick the video each time.");
+    }
+    detail.push("A 4K rendition is the safe choice here — the homecast fallback command makes one.");
+    return { level: "degraded", headline: "This will work, but a 4K file is the better fit.", detail };
   }
 
   detail.push(`${c.renderer} · textures to ${c.maxTextureSize} px · HEVC Main 10 ${c.hevcMain10}`);

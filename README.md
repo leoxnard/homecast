@@ -135,6 +135,18 @@ in Chrome, so the web player gets the lossless one. But Chrome does not implemen
 Whatever should be the default has to be first in the file. `inspect` warns about
 this whenever a file has more than one audio track.
 
+### On a phone
+
+Phones are not the target — an 8K master can outrun a mobile decoder, and §5.1's
+maths means you want the pixels on a big screen anyway. But the page is fully
+responsive: the toolbar fits, the chrome respects the notch and home indicator,
+**pinch zooms**, **double-tap resets the view**, and the capability panel tells
+you plainly that a 4K rendition is the better fit rather than letting an 8K file
+stutter unexplained.
+
+iOS Safari has no File System Access API, so the library cannot remember files
+there — you pick the video each time. That is a browser limitation, not a bug.
+
 ### Watch together (M5)
 
 Press `W`. Start a room, send the link (`/w/7QK2M`), and you both open **your own

@@ -67,7 +67,7 @@ function closePanel(): void {
 }
 
 function showHelp(): void {
-  showPanel(helpPanel(closePanel));
+  showPanel(helpPanel(closePanel, capability.touch));
 }
 
 function showStart(): void {
