@@ -18,6 +18,7 @@ export interface ControlCallbacks {
   onMarkChapter?: () => void;
   onShowLibrary?: () => void;
   onShowChapters?: () => void;
+  onShowRoom?: () => void;
 }
 
 /** Held to push past the computed FOV clamps (§4.3). */
@@ -123,6 +124,7 @@ export class Controls {
         case "m": this.cb.onMarkChapter?.(); break;
         case "b": this.cb.onShowLibrary?.(); break;
         case "c": this.cb.onShowChapters?.(); break;
+        case "w": this.cb.onShowRoom?.(); break;
         case "f": this.cb.onToggleFullscreen?.(); break;
         case "o": this.cb.onOpenFile?.(); break;
         case "?": this.cb.onToggleHelp?.(); break;

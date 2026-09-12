@@ -20,11 +20,19 @@ import {
   entryId, getEntry, patchEntry, putEntry, requestAccess, queryAccess,
   type LibraryEntry,
 } from "./db.ts";
-import { chapterIndexAt, normaliseChapters, type Chapter } from "../shared/chapters.ts";
+import { chapterIndexAt, normaliseChapters, type Chapter, type ViewDirection } from "../shared/chapters.ts";
 import { formatBytes } from "./format.ts";
+import { Room, type PeerInfo, type RoomStatus } from "./room.ts";
+import { Sync, type PeerGaze } from "./sync.ts";
+import { Presence } from "./presence.ts";
+import { RoomPanel } from "./room-panel.ts";
+import { ROOM_PATH } from "../shared/protocol.ts";
 
-const canvas = document.querySelector<HTMLCanvasElement>("#view");
-if (!canvas) throw new Error("#view canvas missing");
+const canvasElement = document.querySelector<HTMLCanvasElement>("#view");
+if (!canvasElement) throw new Error("#view canvas missing");
+// Re-bound as non-nullable: the narrowing above does not reach into the
+// functions declared below.
+const canvas: HTMLCanvasElement = canvasElement;
 
 const capability = probeCapability();
 const viewer = new Viewer(canvas);
@@ -33,6 +41,8 @@ const wakeLock = new WakeLock();
 const video = document.createElement("video");
 video.preload = "auto";
 video.playsInline = true;
+// Drift correction nudges playbackRate; keep pitch fixed, since this is music.
+video.preservesPitch = true;
 
 let opened: OpenedVideo | undefined;
 let entry: LibraryEntry | undefined;
@@ -227,11 +237,13 @@ function togglePlay(): void {
 function seek(delta: number): void {
   if (!Number.isFinite(video.duration)) return;
   video.currentTime = Math.min(Math.max(0, video.currentTime + delta), video.duration);
+  sync.sendControl("seek");
 }
 
 function seekTo(fraction: number): void {
   if (!Number.isFinite(video.duration)) return;
   video.currentTime = video.duration * Math.min(Math.max(0, fraction), 1);
+  sync.sendControl("seek");
 }
 
 function jumpToChapter(index: number): void {
@@ -243,6 +255,8 @@ function jumpToChapter(index: number): void {
     viewer.look(chapter.view.yaw, chapter.view.pitch);
     viewer.setFov(chapter.view.fov, true);
   }
+  // Take everyone to the same chapter, view included.
+  sync.sendControl("seek", chapter.view);
 }
 
 function stepChapter(direction: -1 | 1): void {
@@ -256,6 +270,88 @@ async function toggleFullscreen(): Promise<void> {
   else await document.documentElement.requestFullscreen().catch(() => toast("Fullscreen refused", { warn: true }));
 }
 
+// --- watch-together (M5) ----------------------------------------------------
+
+const presence = new Presence(document.body);
+viewer.scene.add(presence.group);
+
+const room = new Room({
+  onStatus: (status: RoomStatus, detail?: string) => {
+    roomPanel.setStatus(status, detail);
+    if (status === "failed" && detail) toast(detail, { warn: true, ms: 7000 });
+    hud.setRoom(room.roomCode, status, room.peerCount);
+  },
+  onPeers: (peers: PeerInfo[]) => {
+    roomPanel.setPeers(peers);
+    hud.setRoom(room.roomCode, undefined, peers.length);
+  },
+  onMessage: (from, message) => sync.handle(from, message),
+  onPeerReady: (id) => {
+    sync.greet(id);
+    toast("Someone joined the room");
+  },
+});
+
+const sync = new Sync(room, {
+  video: () => video,
+  view: () => viewer.state,
+  applyView: (v: ViewDirection) => {
+    viewer.look(v.yaw, v.pitch);
+    viewer.setFov(v.fov, true);
+  },
+  onGaze: (gazes: PeerGaze[]) => presence.update(gazes),
+  onNotice: (message, warn) => toast(message, { warn, ms: warn ? 8000 : 3500 }),
+  identity: () => ({
+    name: "viewer",
+    file: opened?.name,
+    duration: Number.isFinite(video.duration) ? video.duration : undefined,
+  }),
+});
+
+const roomPanel = new RoomPanel({
+  onHost: () => startRoom(randomRoomCode()),
+  onJoin: (code) => startRoom(code),
+  onLeave: () => leaveRoom(),
+  onToggleViewLock: (locked) => {
+    sync.viewLocked = locked;
+    toast(locked ? "View locked to theirs" : "View unlinked — you can look around freely");
+  },
+  onResync: () => sync.resync(),
+  onClose: closePanel,
+});
+
+/** Same alphabet as the server (no 0/O/1/I/L). */
+function randomRoomCode(): string {
+  const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+  return [...crypto.getRandomValues(new Uint8Array(5))]
+    .map((b) => alphabet[b % alphabet.length])
+    .join("");
+}
+
+function startRoom(code: string): void {
+  const clean = code.toUpperCase().replace(/[\s-]/g, "");
+  room.join(clean);
+  sync.start();
+  roomPanel.setRoom(clean);
+  roomPanel.setViewLocked(sync.viewLocked);
+  history.replaceState(null, "", `${ROOM_PATH}${clean}`);
+  if (!opened) toast("Open your copy of the video — the file is never sent", { ms: 6000 });
+}
+
+function leaveRoom(): void {
+  room.leave();
+  sync.stop();
+  presence.clear();
+  roomPanel.setIdle();
+  hud.setRoom("", "closed", 0);
+  history.replaceState(null, "", "/");
+  toast("Left the room");
+}
+
+function showRoom(): void {
+  showPanel(roomPanel.root);
+}
+
 // --- HUD --------------------------------------------------------------------
 
 const hud = new Hud({
@@ -266,6 +362,7 @@ const hud = new Hud({
   onChapterJump: jumpToChapter,
   onShowLibrary: () => void showLibrary(),
   onShowChapters: showChapters,
+  onShowRoom: showRoom,
 });
 document.body.append(hud.root);
 
@@ -280,7 +377,10 @@ window.addEventListener("pointermove", nudgeHud);
 nudgeHud();
 
 new Controls(viewer, canvas, {
-  onViewChange: nudgeHud,
+  onViewChange: () => {
+    nudgeHud();
+    sync.noteLocalMove();
+  },
   onTogglePlay: togglePlay,
   onSeek: seek,
   onSeekTo: seekTo,
@@ -291,6 +391,7 @@ new Controls(viewer, canvas, {
   onMarkChapter: markChapter,
   onShowLibrary: () => (library.root.classList.contains("hidden") ? void showLibrary() : library.setVisible(false)),
   onShowChapters: () => (currentPanel === chapterEditor.root ? closePanel() : showChapters()),
+  onShowRoom: () => (currentPanel === roomPanel.root ? closePanel() : showRoom()),
 });
 
 // --- video events -----------------------------------------------------------
@@ -298,6 +399,7 @@ new Controls(viewer, canvas, {
 video.addEventListener("play", () => {
   void wakeLock.acquire();
   nudgeHud();
+  sync.sendControl("play");
 });
 video.addEventListener("seeked", () => {
   // A seek while paused fires no other event that would record the position.
@@ -307,6 +409,7 @@ video.addEventListener("pause", () => {
   void wakeLock.release();
   persistResume();
   hud.setVisible(true);
+  sync.sendControl("pause");
 });
 video.addEventListener("error", () => {
   const code = video.error?.code;
@@ -379,6 +482,7 @@ window.addEventListener("resize", () => viewer.resize());
 function frame(): void {
   viewer.resize();
   viewer.render();
+  presence.updateArrow(viewer.camera, canvas);
 
   const quality = video.getVideoPlaybackQuality?.();
   hud.update({
@@ -406,6 +510,11 @@ requestAnimationFrame(frame);
 
 // --- start ------------------------------------------------------------------
 
+// A room code in the URL is the whole invitation (§4.3: no accounts).
+const roomFromUrl = location.pathname.startsWith(ROOM_PATH)
+  ? location.pathname.slice(ROOM_PATH.length).toUpperCase()
+  : "";
+
 // Dev-only: `?src=/path.mp4` loads a file over HTTP without the native picker,
 // so the renderer can be driven from a test harness. Never built into production.
 const devSrc = import.meta.env.DEV ? new URLSearchParams(location.search).get("src") : null;
@@ -423,10 +532,16 @@ if (devSrc) {
   });
 }
 
+if (roomFromUrl) {
+  startRoom(roomFromUrl);
+  showRoom();
+}
+
 if (import.meta.env.DEV) {
   Object.assign(window as unknown as Record<string, unknown>, {
     __homecast: {
-      viewer, video, capability, library, chapterEditor,
+      viewer, video, capability, library, chapterEditor, room, sync, presence, roomPanel,
+      startRoom, leaveRoom,
       get chapters() { return chapters; },
       get entry() { return entry; },
     },

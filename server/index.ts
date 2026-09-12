@@ -13,6 +13,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { attachSignaling, signalingStats } from "./signaling.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -29,6 +30,12 @@ const MIME: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
+  // Present so local test fixtures play correctly. This does NOT make homecast
+  // a video host: the deployed image contains only the built page (see
+  // .dockerignore), and PLAN §2 explains at length why serving media from this
+  // box was rejected.
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
 };
 
 /** Resolve a URL path inside ROOT, or undefined if it escapes or is missing. */
@@ -50,6 +57,10 @@ function serve(req: IncomingMessage, res: ServerResponse): void {
   const url = req.url ?? "/";
 
   if (url === "/healthz") return send(res, 200, "ok");
+  if (url === "/stats") {
+    // Room and peer counts only — no codes, no addresses, nothing identifying.
+    return send(res, 200, JSON.stringify(signalingStats()), "application/json; charset=utf-8");
+  }
 
   const file = resolveFile(url);
 
@@ -82,13 +93,13 @@ const server = createServer((req, res) => {
   }
 });
 
-// M5 will attach the signalling WebSocket here:
-//   server.on("upgrade", (req, socket, head) => { ... })
-// Same origin as the page, so it needs no extra domain, no CORS, and one
-// Cloudflare tunnel route.
+// Signalling lives on the same origin as the page, so it needs no extra domain,
+// no CORS, and one tunnel route: the page came from here, so `wss://` to /ws
+// rides the same hostname.
+attachSignaling(server, "/ws");
 
 server.listen(PORT, HOST, () => {
-  console.log(`homecast serving ${ROOT} on http://${HOST}:${PORT}`);
+  console.log(`homecast serving ${ROOT} on http://${HOST}:${PORT} (signalling at /ws)`);
 });
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {

@@ -158,3 +158,50 @@ in the output, so a future regression surfaces rather than quietly accumulating.
 Marking a video "finished" when the playhead is within a flat 15 s of the end is
 right for a 2 h 17 m concert and wrong for a 40 s clip, where it means anything
 past 25 s never resumes. The window is now `min(15 s, 5% of duration)`.
+
+---
+
+## F9. Media events are asynchronous, so they echo — and the echo compounds
+
+`video.play()` and `.pause()` emit their events **after** the call returns. A
+synchronous "I am applying a remote action, do not rebroadcast" flag is therefore
+already cleared by the time the event fires, so applying a peer's play echoed it
+straight back to them.
+
+That alone would be harmless ping-pong. It was not harmless, because every hop
+re-applies latency compensation: `currentTime = theirTime + age`. Each round trip
+added another `age`. Measured before the fix: **two viewers 4.8 s apart within
+seconds of pressing play**, then stable at that offset — which looks like a
+tuning problem and is actually a feedback loop.
+
+Fixed with a short suppression *window* (`ECHO_WINDOW_MS`) rather than a flag.
+A deliberate action inside that window is lost, but the 1 Hz state broadcast
+picks it up immediately.
+
+## F10. Symmetric drift correction oscillates — somebody has to own the timeline
+
+If every peer corrects toward every other peer, they chase each other. There is
+no stable point, and adding damping only slows the wobble.
+
+One peer must own the timeline. Rather than negotiate it, **the lowest peer id
+wins**: every peer computes the same answer from the room roster, it needs no
+messages, and it survives someone leaving. Control actions (play, pause, seek)
+stay symmetric — anyone can act — but only the owner's `state` heartbeat is used
+to correct drift, and the owner ignores everyone else's.
+
+## F11. A 4% rate nudge is audible on music, and hysteresis is required
+
+Easing a playhead into alignment by nudging `playbackRate` is the right idea, but
+the first implementation had two faults:
+
+1. **No hysteresis.** Correction started and stopped at the same threshold, so a
+   correction landing near it oscillated in and out and the rate never came back
+   to 1 — measured stuck at 1.04 indefinitely. Now easing starts at 0.15 s and
+   does not stop until inside 0.05 s.
+2. **Too much authority.** 4% is fine for speech and clearly audible on sustained
+   music, which is exactly what this player is for. Capped at 2%, with
+   `preservesPitch` set explicitly.
+
+Large gaps still hard-seek — being a second apart is worse than one visible jump.
+Verified: a forced 3 s drift snapped back at once and settled 0.08 s apart with
+the rate at exactly 1.

@@ -51,6 +51,15 @@ A `404` from the hostname means the proxy is reachable but no router claims it
 yet: the tunnel is right and the application is not deployed (or its domain field
 is empty).
 
+### WebSockets through the tunnel
+
+Signalling lives at **`/ws`** on the same origin as the page. Cloudflare tunnels
+and Traefik both pass WebSocket upgrades through without extra configuration, so
+there is nothing to add — but if rooms connect on localhost and not in
+production, that upgrade is the first thing to check.
+
+The server answers upgrades on `/ws` only and destroys any other upgrade attempt.
+
 ### Health
 
 The container exposes `/healthz`, which returns `ok`. Coolify's health check uses

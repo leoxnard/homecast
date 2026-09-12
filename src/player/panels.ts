@@ -84,6 +84,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["M", "drop a chapter marker here"],
   ["C", "chapter list"],
   ["B", "library"],
+  ["W", "watch together"],
   ["0–9", "jump to 0–90% of the file"],
   ["R", "reset the view"],
   ["F", "fullscreen"],

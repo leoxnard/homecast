@@ -373,3 +373,65 @@ html, body {
   cursor: pointer;
 }
 .chapter-mini:hover { color: var(--fg); border-color: rgba(255, 255, 255, 0.2); }
+
+/* --- watch together (M5) -------------------------------------------------- */
+.room-panel { max-width: 560px; }
+
+.room-actions { display: flex; align-items: center; gap: 10px; margin: 14px 0; flex-wrap: wrap; }
+
+.code-input, .room-link {
+  font-family: var(--hud-font);
+  font-size: 13px;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.code-input { width: 110px; text-transform: uppercase; letter-spacing: 0.12em; }
+.room-link { flex: 1; min-width: 0; color: var(--dim); }
+.code-input:focus, .room-link:focus { outline: none; border-color: var(--accent); }
+
+.room-code-wrap { margin-top: 14px; }
+.room-code {
+  font-family: var(--hud-font);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+.room-status { font-size: 12px; color: var(--dim); min-height: 18px; }
+.room-status.connected { color: var(--native); }
+.room-status.failed { color: var(--danger); }
+.room-status.waiting { color: var(--warn); }
+
+.peer-list { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.peer-row { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.peer-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.peer-dot.connected { background: var(--native); }
+.peer-dot.connecting, .peer-dot.new { background: var(--warn); }
+.peer-dot.failed, .peer-dot.disconnected, .peer-dot.closed { background: var(--danger); }
+.peer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-meta { margin-left: auto; font-family: var(--hud-font); font-size: 11px; color: var(--dim); }
+
+.toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+.toggle input { accent-color: var(--accent); }
+
+.btn.danger { border-color: rgba(255, 122, 122, 0.4); color: var(--danger); }
+.btn.danger:hover { border-color: var(--danger); }
+.btn.live { border-color: var(--native); color: var(--native); }
+
+/* Points toward a viewer who is looking outside your current frame. */
+.gaze-arrow {
+  position: fixed;
+  top: 0; left: 0;
+  width: 0; height: 0;
+  border-left: 13px solid var(--accent);
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  pointer-events: none;
+  z-index: 8;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.8));
+}

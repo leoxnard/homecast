@@ -13,6 +13,7 @@ export interface HudCallbacks {
   onChapterJump: (index: number) => void;
   onShowLibrary: () => void;
   onShowChapters: () => void;
+  onShowRoom: () => void;
 }
 
 export interface HudState {
@@ -54,6 +55,7 @@ export class Hud {
   private readonly played: HTMLElement;
   private readonly chapterBar: HTMLElement;
   private readonly chapterLabel: HTMLElement;
+  private readonly roomBtn: HTMLButtonElement;
   private readonly viewEl: HTMLElement;
   private readonly nativeBadge: HTMLElement;
   private readonly statsEl: HTMLElement;
@@ -72,12 +74,14 @@ export class Hud {
     libraryBtn.addEventListener("click", () => this.cb.onShowLibrary());
     const chaptersBtn = el("button", "btn", "Chapters");
     chaptersBtn.addEventListener("click", () => this.cb.onShowChapters());
+    this.roomBtn = el("button", "btn", "Watch together");
+    this.roomBtn.addEventListener("click", () => this.cb.onShowRoom());
     const openBtn = el("button", "btn", "Open file");
     openBtn.addEventListener("click", () => this.cb.onOpenFile());
     const fsBtn = el("button", "btn", "Fullscreen");
     fsBtn.addEventListener("click", () => this.cb.onToggleFullscreen());
     const topRight = el("div", "hud-top-right");
-    topRight.append(libraryBtn, chaptersBtn, openBtn, fsBtn);
+    topRight.append(this.roomBtn, libraryBtn, chaptersBtn, openBtn, fsBtn);
     top.append(this.titleEl, this.chapterLabel, topRight);
 
     // --- view readout -------------------------------------------------------
@@ -173,6 +177,18 @@ export class Hud {
       { i: -1 },
     );
     this.chapterLabel.textContent = current.c ? `${current.i + 1}. ${current.c.title}` : "";
+  }
+
+  /** Reflect room state on the toolbar button, so it is visible while watching. */
+  setRoom(code: string, status?: string, peers = 0): void {
+    if (!code) {
+      this.roomBtn.textContent = "Watch together";
+      this.roomBtn.classList.remove("live");
+      return;
+    }
+    this.roomBtn.textContent = peers ? `${code} · ${peers} connected` : `${code} · waiting`;
+    this.roomBtn.classList.toggle("live", peers > 0);
+    if (status) this.roomBtn.title = status;
   }
 
   setVisible(visible: boolean): void {

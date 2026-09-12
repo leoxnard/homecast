@@ -4,7 +4,7 @@ A local-first 360° video player. Your video files never leave your machine —
 see [PLAN.md](PLAN.md) for the full design, and [docs/findings.md](docs/findings.md)
 for measured corrections to it.
 
-**Status: M1–M4 complete.** M5 (watch-together) and M6 (YouTube) are not built yet.
+**Status: M1–M5 complete.** M6 (the YouTube adapter) is not built yet.
 
 ## Requirements
 
@@ -122,6 +122,10 @@ Against the 8192×4096 HEVC Main 10 master (PLAN §3.0):
 - Full authoring loop: author in the player → export → `prepare -c` → read back
 - `prepare` is idempotent — four consecutive runs leave one chapter track, not four
 - Resume, thumbnails and chapter persistence survive a reload
+- Two real browsers in one room: forced 3 s drift recovered immediately, settled
+  **0.08 s apart** with `playbackRate` back at exactly 1
+- View lock, unlink, last-mover-leads and the presence marker verified by
+  projecting the marker and checking it lands where the geometry says it should
 
 ### Audio
 
@@ -130,6 +134,28 @@ in Chrome, so the web player gets the lossless one. But Chrome does not implemen
 `audioTracks`, so it always plays **track #1 and cannot switch** — VLC can.
 Whatever should be the default has to be first in the file. `inspect` warns about
 this whenever a file has more than one audio track.
+
+### Watch together (M5)
+
+Press `W`. Start a room, send the link (`/w/7QK2M`), and you both open **your own
+copy** of the same file. The server introduces the two browsers and then goes
+quiet — playhead, play/pause and view direction travel directly between you over
+a WebRTC data channel. The video itself never moves.
+
+- **View is locked by default**, with an unlink toggle. Whoever moved most
+  recently leads, so two locked viewers never fight over the camera.
+- **A marker shows where the other viewer is looking**, with an arrow pointing
+  toward them while they are outside your frame.
+- **Drift is corrected continuously** — small gaps by easing `playbackRate` at
+  most 2% with pitch preserved, large ones by seeking. Measured 0.08 s apart.
+- **Resync to me** forces everyone onto your playhead, for when someone's
+  decoder falls behind.
+- If your files differ in length, it says so rather than letting you wonder why
+  nothing lines up.
+
+Connections are direct, so a strict NAT or corporate firewall can prevent one
+forming. There is no TURN relay, because relaying would mean routing your traffic
+through a server.
 
 ## Deploying
 

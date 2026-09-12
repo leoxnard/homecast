@@ -450,13 +450,22 @@ Full loop verified on the real footage: author in the player → export sidecar 
 `homecast prepare -c` → embedded chapters read back by ffprobe with `;`, `=` and
 `#` escaping intact, both audio tracks and the spherical metadata preserved.
 
-### M5 — watch-together
-- [ ] WebSocket signaling service on `leosrv` (handshake only — **no media, ever**)
-- [ ] Static page deployed via the PaaS layer to the target subdomain
-- [ ] WebRTC data channel; room codes `/w/XXXXX`
-- [ ] Sync `{ t, playing, yaw, pitch, fov }`; locked-by-default + unlink toggle
-- [ ] Presence marker for the other viewer's gaze
-- [ ] Drift correction / resync
+### M5 — watch-together ✅
+- [x] WebSocket signalling service (handshake only — **no media, ever**)
+- [x] Static page deployed via the PaaS layer to the target subdomain
+- [x] WebRTC data channel; room codes `/w/XXXXX`
+- [x] Sync `{ t, playing, yaw, pitch, fov }`; locked-by-default + unlink toggle
+- [x] Presence marker for the other viewer's gaze, plus an off-screen arrow
+- [x] Drift correction / resync
+
+Signalling and the page share one origin, so `wss://` needs no second domain and
+no CORS. Two data channels per peer: `control` ordered and reliable, `view`
+unordered with no retransmits — a late gaze update is worthless, a lost pause is not.
+
+Three problems had to be solved rather than assumed (docs/findings.md F9–F11):
+clocks differ between machines, media events fire asynchronously and echo, and
+symmetric drift correction oscillates. Measured after the fixes: **0.08 s apart**,
+`playbackRate` back to exactly 1, a forced 3 s drift recovered immediately.
 
 ### M6 — YouTube adapter
 - [ ] Abstract the player interface behind M2's renderer

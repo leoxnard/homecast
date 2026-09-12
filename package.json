@@ -9,18 +9,23 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && npm run build:server",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "homecast": "node ./bin/homecast.mjs",
-    "serve": "node server/index.ts"
+    "serve": "node dist-server/index.js",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist-server/index.js --banner:js=\"import{createRequire}from'node:module';const require=createRequire(import.meta.url);\"",
+    "serve:dev": "node server/index.ts"
   },
   "dependencies": {
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/three": "^0.180.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.2",
     "vite": "^7.1.5"
   },
