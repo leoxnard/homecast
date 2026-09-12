@@ -1,0 +1,138 @@
+# homecast
+
+A local-first 360° video player. Your video files never leave your machine —
+see [PLAN.md](PLAN.md) for the full design, and [docs/findings.md](docs/findings.md)
+for measured corrections to it.
+
+**Status: M1–M4 complete.** M5 (watch-together) and M6 (YouTube) are not built yet.
+
+## Requirements
+
+- Node ≥ 22.18 — the CLI runs TypeScript directly via native type stripping, so
+  there is no build step for it
+- ffmpeg (looked for at `/opt/homebrew/bin/ffmpeg`, else on `PATH`;
+  override with `HOMECAST_FFMPEG` / `HOMECAST_FFPROBE`)
+
+```bash
+npm install
+```
+
+## The toolchain (M1)
+
+```bash
+node bin/homecast.mjs inspect  <file>              # what the player cares about
+node bin/homecast.mjs prepare  <input> [-c ch.json] # lossless remux + chapters
+node bin/homecast.mjs fallback <input>              # conditional 4K H.264
+node bin/homecast.mjs spherical <file> [-s <orig>]  # repair 360° metadata
+node bin/homecast.mjs chapters extract <video>      # embedded chapters → sidecar
+```
+
+`prepare` never re-encodes. It remuxes with `-c copy`, optionally injecting
+chapters, then verifies with ffprobe that resolution, codec, pixel format,
+duration and audio track count all came through unchanged — and refuses to run
+at all if free disk is under 2× the input, because `-c copy` writes a whole new
+file (PLAN §3.6).
+
+It also **re-injects the spherical metadata that ffmpeg drops**. This is the one
+place the plan was wrong: §5.8 assumed `-c copy` preserves it. It does not, and
+the loss is silent. See [docs/findings.md](docs/findings.md#f1).
+
+Chapters need two outputs, because browsers cannot read MP4 chapter atoms
+(§5.4) and VLC cannot load an external chapter file (§5.5):
+
+```bash
+node bin/homecast.mjs prepare master.mp4 -c chapters.homecast.json
+#   → embedded chapters for VLC / QuickTime
+#   → the sidecar stays alongside for the web player, and carries the
+#     per-chapter view directions that MP4 has nowhere to put
+```
+
+## The player (M2–M4)
+
+```bash
+npm run dev      # http://localhost:5173
+npm run build    # static files in dist/
+```
+
+Open a file with the button, `O`, or by dropping it on the window. Drop a
+`.homecast.json` sidecar to load chapters.
+
+### Library (M3)
+
+Files you open are remembered — the file itself stays where it is on disk and is
+never copied, only referenced through a `FileSystemFileHandle` kept in IndexedDB.
+One click reopens an 88 GB master without re-picking it. The grid shows a locally
+generated thumbnail, duration, chapter count and resume position. If the browser
+has dropped the handle's permission, the card says so and one click re-grants it.
+
+Press `B` for the library, or the Library button.
+
+### Chapters (M4)
+
+Press `M` while watching to drop a marker at the current frame. It asks for a
+name and **captures where you were looking** — yaw, pitch and FOV — so jumping to
+that chapter later restores the view as well as the time. Press `C` for the list.
+
+Export writes both required outputs (§5.4, §5.5):
+
+- **`.homecast.json`** — the sidecar the player reads, and the only place the
+  per-chapter view directions can live, since MP4 has nowhere to put them
+- **`.ffmeta.txt`** — feeds `homecast prepare -c`, which embeds the chapters so
+  VLC, QuickTime and Infuse see them too
+
+Import works by button or by dropping a sidecar someone sent you onto the window.
+
+The page reports what your machine can do *before* you open anything, and names
+the file you should open if the master will not work here — a GPU whose
+`MAX_TEXTURE_SIZE` is under 8192 cannot bind an 8K equirect frame at all
+(§5.2), and that should not surface as a mysterious black screen mid-concert.
+
+### Zoom
+
+Limits are computed from the file's resolution and your window size, not
+hardcoded: out to 110°, in to 2× upscale. The **1:1 NATIVE** badge lights when
+one source pixel lands on exactly one screen pixel. Hold **⌥** to override the
+clamps.
+
+The readout also shows how many pixels the visible arc actually gets, which is
+the honest number: an 8K equirect frame spreads 7680–8192 px over a full 360°,
+so a 90° view is only ~1900–2000 px wide (§5.1).
+
+### Keyboard
+
+| | |
+|---|---|
+| drag, arrows | pan (shift for bigger steps) |
+| scroll, `+`/`−` | zoom (⌥ to pass the clamps) |
+| space, `K` | play / pause |
+| `J` / `L` | ∓10 s · `,` / `.` step a frame |
+| `[` / `]` | previous / next chapter |
+| `0`–`9` | jump to 0–90% |
+| `R` · `F` · `O` · `?` | reset view · fullscreen · open · help |
+
+## Verified on the real footage
+
+Against the 8192×4096 HEVC Main 10 master (PLAN §3.0):
+
+- 15 s of playback while continuously panning: **0 dropped frames**, 60 fps render loop
+- Orientation calibrated against `ffmpeg v360` rather than by eye —
+  see [test/orientation.md](test/orientation.md)
+- Chapter round-trip through embed → ffprobe → sidecar, escaping intact
+- Spherical metadata re-injection: +130 bytes, chapters intact, decodes clean
+- Full authoring loop: author in the player → export → `prepare -c` → read back
+- `prepare` is idempotent — four consecutive runs leave one chapter track, not four
+- Resume, thumbnails and chapter persistence survive a reload
+
+### Audio
+
+The current master carries two tracks, FLAC then AAC. FLAC-in-MP4 **does** decode
+in Chrome, so the web player gets the lossless one. But Chrome does not implement
+`audioTracks`, so it always plays **track #1 and cannot switch** — VLC can.
+Whatever should be the default has to be first in the file. `inspect` warns about
+this whenever a file has more than one audio track.
+
+## What this is not
+
+Not a video host. Nothing is uploaded, and the server (when M5 arrives) will
+carry only the page and a few hundred bytes of sync state. See PLAN §2 for the
+designs that were evaluated and deliberately rejected.
