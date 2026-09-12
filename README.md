@@ -131,6 +131,17 @@ in Chrome, so the web player gets the lossless one. But Chrome does not implemen
 Whatever should be the default has to be first in the file. `inspect` warns about
 this whenever a file has more than one audio track.
 
+## Deploying
+
+The page is static; the server exists only to hand it out and, from M5, to relay
+WebSocket signalling. A `Dockerfile` and a dependency-free `server/index.ts` are
+included — see [docs/deploy.md](docs/deploy.md) for Coolify settings and why
+Docker is preferred over a static build pack.
+
+```bash
+npm run build && npm run serve   # http://localhost:3000
+```
+
 ## What this is not
 
 Not a video host. Nothing is uploaded, and the server (when M5 arrives) will

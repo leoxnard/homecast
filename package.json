@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local-first 360° video player with synchronised watch-together",
+  "description": "Local-first 360\u00b0 video player with synchronised watch-together",
   "bin": {
     "homecast": "./bin/homecast.mjs"
   },
@@ -12,7 +12,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "homecast": "node ./bin/homecast.mjs"
+    "homecast": "node ./bin/homecast.mjs",
+    "serve": "node server/index.ts"
   },
   "dependencies": {
     "three": "^0.180.0"
