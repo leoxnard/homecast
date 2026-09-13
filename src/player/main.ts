@@ -368,10 +368,14 @@ let catchUpPending = false;
 
 /** How the bytes travel to/from the peer in a transfer, refreshed every few seconds. */
 let routeLabel = "";
+/** The route is not the local network, so Safari's local-address unlock may help. */
+let routeNotLocal = false;
+let localUnlockTried = false;
 setInterval(() => {
   const peer = receiver.current && receiver.busy ? receiver.current.from : sender.sendingTo[0];
   if (!peer || peer === "relay") return void (routeLabel = "");
   void room.route(peer).then((r) => {
+    routeNotLocal = !!r && r.kind !== "local";
     if (!r) return void (routeLabel = "");
     const where = { local: "same network", internet: "over the internet", relay: "via a relay" }[r.kind];
     routeLabel = [where, r.tcp ? "TCP" : "", r.rtt !== undefined ? `${Math.round(r.rtt)} ms` : ""].filter(Boolean).join(" ");
@@ -657,7 +661,14 @@ async function receiveFromRelay(url: string, offer: FileOffer, sink: Sink): Prom
 receiver.onState = (state: ReceiveState) => {
   switch (state.phase) {
     case "receiving":
-      transferCard.progress(state.received, state.size, state.bytesPerSecond, () => receiver.cancel(), routeLabel);
+      transferCard.progress(
+        state.received,
+        state.size,
+        state.bytesPerSecond,
+        () => receiver.cancel(),
+        routeLabel,
+        routeNotLocal && !localUnlockTried ? { label: "Same Wi-Fi? Speed up", run: () => void speedUpLocal() } : undefined,
+      );
       return;
     case "interrupted":
       transferCard.show({
@@ -682,6 +693,19 @@ receiver.onState = (state: ReceiveState) => {
       return;
   }
 };
+
+/** See Room.unlockLocalNetwork: Safari needs mic access before it uses the local network. */
+async function speedUpLocal(): Promise<void> {
+  localUnlockTried = true;
+  const ok = await room.unlockLocalNetwork();
+  toast(
+    ok
+      ? "Looking for a direct path on your Wi-Fi… (the microphone was switched off straight away)"
+      : "Needs microphone permission — Safari only allows local connections with it. Nothing is recorded.",
+    { warn: !ok, ms: 6000 },
+  );
+  if (!ok) localUnlockTried = false;
+}
 
 function openReceived(file: File, handle: FileSystemFileHandle | undefined): void {
   wantVideo = false;
@@ -1034,6 +1058,22 @@ if (roomFromUrl) {
   } else if (invite) {
     showInvite();
   }
+}
+
+// Dev-only: `?devhost=CODE` hosts public/__send.mp4 in that room and shares it
+// from this browser, so a browser that can't be scripted (iOS Safari) can be
+// measured as the sender.
+const devHost = import.meta.env.DEV ? new URLSearchParams(location.search).get("devhost") : null;
+if (devHost) {
+  void fetch("/__send.mp4").then(async (r) => {
+    const file = new File([await r.blob()], "concert-360.mp4", { type: "video/mp4", lastModified: 1700000000000 });
+    await load({ name: file.name, size: file.size, url: URL.createObjectURL(file), file });
+    startRoom(devHost);
+    while (!sharedEntryId) await new Promise((r) => setTimeout(r, 100)); // wait for remember()
+    shareMode = "direct";
+    offerCurrent();
+    showRoom();
+  });
 }
 
 if (import.meta.env.DEV) {

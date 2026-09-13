@@ -328,10 +328,11 @@ export class Room {
    * the side that made the original offer restarts, so the two never collide;
    * the other side asks it to via a signal.
    */
-  private async restartIce(link: PeerLink): Promise<void> {
-    if (!this.peers.has(link.id) || link.pc.connectionState === "connected" || link.pc.signalingState === "closed") return;
+  private async restartIce(link: PeerLink, force = false): Promise<void> {
+    if (!this.peers.has(link.id) || link.pc.signalingState === "closed") return;
+    if (link.pc.connectionState === "connected" && !force) return;
     if (!link.initiator) {
-      this.sendSignal({ type: "signal", to: link.id, data: { restart: true } });
+      this.sendSignal({ type: "signal", to: link.id, data: { restart: true, force } });
       link.restarts++;
       return;
     }
@@ -343,6 +344,26 @@ export class Room {
     } catch {
       /* the next state change tries again or reports */
     }
+  }
+
+  /**
+   * Safari only reveals this device's local network address to WebRTC once the
+   * page has microphone or camera access. Without it, two Apple devices on the
+   * same Wi-Fi cannot see each other and fall back to the router's public
+   * address — which most home routers will not loop back — and then to the
+   * relay, where every byte crosses the home uplink twice. Asking for the
+   * microphone and stopping it at once (nothing is recorded) lifts that, and an
+   * ICE restart then finds the local path. One side doing this is enough.
+   */
+  async unlockLocalNetwork(): Promise<boolean> {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const track of stream.getTracks()) track.stop();
+    } catch {
+      return false;
+    }
+    for (const link of this.peers.values()) void this.restartIce(link, true);
+    return true;
   }
 
   /** Say why no path was found, from the candidates each side gathered. */
@@ -367,12 +388,17 @@ export class Room {
   }
 
   private async acceptSignal(from: string, data: unknown): Promise<void> {
-    const payload = data as { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit; restart?: boolean };
+    const payload = data as {
+      sdp?: RTCSessionDescriptionInit;
+      candidate?: RTCIceCandidateInit;
+      restart?: boolean;
+      force?: boolean;
+    };
     const link = this.peers.get(from) ?? (await this.connectTo(from, false));
 
     try {
       if (payload.restart) {
-        if (link.initiator) await this.restartIce(link);
+        if (link.initiator) await this.restartIce(link, payload.force === true);
       } else if (payload.sdp) {
         await link.pc.setRemoteDescription(payload.sdp);
         for (const candidate of link.pendingCandidates.splice(0)) {

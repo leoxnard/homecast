@@ -39,6 +39,8 @@ export class TransferCard {
   private readonly bar: HTMLElement;
   private readonly fill: HTMLElement;
   private readonly actions: HTMLElement;
+  private actionsKey = "";
+  private runs: Array<() => void> = [];
 
   constructor() {
     this.root = el("div", "transfer-card");
@@ -65,17 +67,32 @@ export class TransferCard {
     this.detail.textContent = opts.detail ?? "";
     this.bar.hidden = opts.progress === undefined;
     if (opts.progress !== undefined) this.fill.style.width = `${Math.max(0, Math.min(1, opts.progress)) * 100}%`;
-    this.actions.replaceChildren(
-      ...(opts.actions ?? []).map((a) => {
-        const b = el("button", a.primary ? "btn primary-small" : "btn", a.label);
-        b.addEventListener("click", a.run);
-        return b;
-      }),
-    );
+    // Progress redraws several times a second; rebuilding the buttons each time
+    // would swallow a tap that lands between pointer-down and click.
+    const actions = opts.actions ?? [];
+    const key = actions.map((a) => `${a.primary ? "*" : ""}${a.label}`).join("|");
+    this.runs = actions.map((a) => a.run);
+    if (key !== this.actionsKey) {
+      this.actionsKey = key;
+      this.actions.replaceChildren(
+        ...actions.map((a, i) => {
+          const b = el("button", a.primary ? "btn primary-small" : "btn", a.label);
+          b.addEventListener("click", () => this.runs[i]?.());
+          return b;
+        }),
+      );
+    }
   }
 
   /** `route` says how the bytes travel ("same network", "over the internet"). */
-  progress(received: number, size: number, bytesPerSecond: number, onCancel: () => void, route?: string): void {
+  progress(
+    received: number,
+    size: number,
+    bytesPerSecond: number,
+    onCancel: () => void,
+    route?: string,
+    extra?: CardAction,
+  ): void {
     const eta = bytesPerSecond > 0 ? formatEta((size - received) / bytesPerSecond) : "";
     const percent = size ? Math.floor((received / size) * 100) : 0;
     const speed = bytesPerSecond > 0 ? `${formatBytes(bytesPerSecond)}/s` : "starting…";
@@ -83,7 +100,7 @@ export class TransferCard {
       title: `Downloading · ${percent}%`,
       detail: [`${formatBytes(received)} of ${formatBytes(size)}`, speed, eta, route].filter(Boolean).join(" · "),
       progress: size ? received / size : 0,
-      actions: [{ label: "Cancel", run: onCancel }],
+      actions: [...(extra ? [extra] : []), { label: "Cancel", run: onCancel }],
     });
   }
 
