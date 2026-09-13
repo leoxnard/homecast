@@ -255,6 +255,7 @@ html, body {
   gap: 18px;
 }
 
+.library-note { max-width: 720px; margin: 0 0 14px; font-size: 12.5px; line-height: 1.45; color: var(--warn); }
 .library-empty { max-width: 460px; margin-top: 40px; }
 .library-empty p { margin: 6px 0; }
 .dim-text { color: var(--dim); }

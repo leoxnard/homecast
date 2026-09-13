@@ -13,6 +13,8 @@ export interface OpenedVideo {
   file: File;
   /** present when the File System Access API was used — M3 will persist this */
   handle?: FileSystemFileHandle;
+  /** library id to keep, when this is a stored copy of a file first opened elsewhere */
+  entryId?: string;
 }
 
 const VIDEO_TYPES: FilePickerAcceptType[] = [
@@ -49,8 +51,28 @@ function pickWithInput(): Promise<OpenedVideo | undefined> {
 }
 
 /** Accept a file dropped onto the page. */
-export function fromDataTransfer(dt: DataTransfer): OpenedVideo | undefined {
-  const file = Array.from(dt.files).find((f) => f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name));
+const isVideo = (f: File) => f.type.startsWith("video/") || /\.(mp4|m4v|mov)$/i.test(f.name);
+
+/**
+ * A dropped video. Chrome and Edge can turn a drop into a file handle, which
+ * lets the library reopen it later like a picked file. The handle request must
+ * start synchronously inside the drop event, before the data transfer expires.
+ */
+export async function fromDataTransfer(dt: DataTransfer): Promise<OpenedVideo | undefined> {
+  const items = Array.from(dt.items).filter((i) => i.kind === "file");
+  const pending = items.map((item) => ({
+    file: item.getAsFile(),
+    handle: (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })
+      .getAsFileSystemHandle?.()
+      .catch(() => null),
+  }));
+  for (const { file, handle } of pending) {
+    if (!file || !isVideo(file)) continue;
+    const h = await handle;
+    const fileHandle = h && h.kind === "file" ? (h as FileSystemFileHandle) : undefined;
+    return { name: file.name, size: file.size, url: URL.createObjectURL(file), file, handle: fileHandle };
+  }
+  const file = Array.from(dt.files).find(isVideo);
   return file ? { name: file.name, size: file.size, url: URL.createObjectURL(file), file } : undefined;
 }
 

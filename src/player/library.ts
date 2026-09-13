@@ -4,6 +4,7 @@
  * is no index on any server, because there is no server in this path at all.
  */
 import { listEntries, deleteEntry, queryAccess, type LibraryEntry } from "./db.ts";
+import { forgetCopy, isPersisted, keptCopy, needsCopyToKeep } from "./keep.ts";
 import { formatTime, formatBytes } from "./format.ts";
 
 export interface LibraryCallbacks {
@@ -28,6 +29,7 @@ export class Library {
   private readonly cb: LibraryCallbacks;
   private readonly grid: HTMLElement;
   private readonly empty: HTMLElement;
+  private readonly note: HTMLElement;
   private readonly objectUrls: string[] = [];
   private hasEntries = false;
   private currentId?: string;
@@ -46,6 +48,13 @@ export class Library {
     close.addEventListener("click", () => this.cb.onClose());
     header.append(heading, spacer, add, close);
 
+    this.note = el(
+      "div",
+      "library-note",
+      "Safari may clear saved videos if homecast isn't opened for a few weeks. To keep them for good, " +
+        "add homecast to the Dock (File → Add to Dock) or your Home Screen and use it from there.",
+    );
+    this.note.hidden = true;
     this.grid = el("div", "library-grid");
     this.empty = el("div", "library-empty");
     this.empty.append(
@@ -53,12 +62,11 @@ export class Library {
       el(
         "p",
         "dim-text",
-        "Open a video and it is remembered — the file stays where it is on disk, " +
-          "and homecast keeps only a reference to it.",
+        "Open a video and it is remembered here, with where you stopped and its chapters.",
       ),
     );
 
-    this.root.append(header, this.grid, this.empty);
+    this.root.append(header, this.note, this.grid, this.empty);
   }
 
   /** Which entry is loaded in the player, so its card can say so. */
@@ -69,6 +77,9 @@ export class Library {
 
   async refresh(): Promise<void> {
     const entries = await listEntries();
+    // Safari clears site storage after weeks without a visit unless the site is
+    // an installed web app; say so where the saved videos are.
+    this.note.hidden = !(entries.length && needsCopyToKeep() && !(await isPersisted()));
     this.releaseUrls();
     this.grid.replaceChildren();
     this.hasEntries = entries.length > 0;
@@ -85,7 +96,8 @@ export class Library {
 
     const thumb = el("div", "card-thumb");
     if (entry.thumbnail) {
-      const url = URL.createObjectURL(entry.thumbnail);
+      const bytes = entry.thumbnail;
+      const url = URL.createObjectURL(bytes instanceof Blob ? bytes : new Blob([bytes], { type: "image/jpeg" }));
       this.objectUrls.push(url);
       const img = el("img");
       img.src = url;
@@ -128,15 +140,23 @@ export class Library {
       const access = await queryAccess(entry.handle);
       if (access === "prompt") body.append(el("div", "card-note", "Click to re-allow access"));
       else if (access === "denied") body.append(el("div", "card-note warn-text", "Access denied — re-pick this file"));
+    } else if (await keptCopy(entry.name, entry.size)) {
+      body.append(el("div", "card-note dim-text", "Saved on this device"));
     } else {
-      body.append(el("div", "card-note", "Dropped file — pick it again to reopen"));
+      body.append(el("div", "card-note", "Not saved on this device — pick it again to reopen"));
     }
 
     const remove = el("button", "card-remove", "×");
-    remove.title = "Forget this file (the file itself is not touched)";
+    remove.title = entry.handle
+      ? "Remove from the library (the file itself is not touched)"
+      : "Remove from the library and delete the copy saved on this device";
     remove.addEventListener("click", (e) => {
       e.stopPropagation();
-      void deleteEntry(entry.id).then(() => this.refresh());
+      void (async () => {
+        if (!entry.handle) await forgetCopy(entry.name);
+        await deleteEntry(entry.id);
+        await this.refresh();
+      })();
     });
 
     card.append(thumb, body);

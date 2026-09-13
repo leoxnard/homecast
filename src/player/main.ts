@@ -17,6 +17,7 @@ import { Library } from "./library.ts";
 import { ChapterEditor } from "./chapter-editor.ts";
 import { captureThumbnail } from "./thumbnail.ts";
 import { SharePanel } from "./share/share-panel.ts";
+import { keepOnDevice, keptCopy, needsCopyToKeep, requestPersistence } from "./keep.ts";
 import {
   entryId, getEntry, patchEntry, putEntry, requestAccess, queryAccess,
   type LibraryEntry,
@@ -124,7 +125,12 @@ async function openFromLibrary(e: LibraryEntry): Promise<void> {
     return;
   }
   if (!e.handle) {
-    toast("That file was dropped rather than picked, so it cannot be reopened automatically", { warn: true, ms: 6000 });
+    const copy = await keptCopy(e.name, e.size);
+    if (copy) {
+      library.setVisible(false);
+      return load({ name: e.name, size: copy.size, url: URL.createObjectURL(copy), file: copy, entryId: e.id }, e);
+    }
+    toast("That video isn't saved on this device — pick the file again", { warn: true, ms: 6000 });
     return void openFile();
   }
   const access = await queryAccess(e.handle);
@@ -210,14 +216,14 @@ async function load(next: OpenedVideo, known?: LibraryEntry): Promise<void> {
   toast(`${next.name} · ${formatBytes(next.size)}`);
 }
 
-const THUMBNAIL_VERSION = 2;
+const THUMBNAIL_VERSION = 3;
 
 /** Record the entry once we know the file's real dimensions and duration. */
 async function remember(): Promise<void> {
   if (!opened) return;
   const now = Date.now();
   const file = opened.file;
-  const id = entryId({ name: opened.name, size: opened.size, lastModified: file.lastModified });
+  const id = opened.entryId ?? entryId({ name: opened.name, size: opened.size, lastModified: file.lastModified });
   const existing = await getEntry(id);
 
   const record: LibraryEntry = {
@@ -244,6 +250,9 @@ async function remember(): Promise<void> {
   entry = record;
   chapters = record.chapters;
   await putEntry(record);
+  void requestPersistence();
+  // Safari cannot reopen a picked file later; keep a copy so it is still here next time.
+  if (!opened.handle && !opened.entryId && needsCopyToKeep() && file.size > 0) void startKeeping(file);
   // Peers only heard our identity at connect time; now there is a file to describe.
   sync.announce();
   uploadedPath = relayPath(record.relayPath);
@@ -265,7 +274,7 @@ async function remember(): Promise<void> {
 
   if (!record.thumbnail || record.thumbnailVersion !== THUMBNAIL_VERSION) {
     const thumb = await captureThumbnail(video, (w) => viewer.snapshot(w));
-    if (thumb) await patchEntry(id, { thumbnail: thumb.blob, thumbnailVersion: THUMBNAIL_VERSION });
+    if (thumb) await patchEntry(id, { thumbnail: await thumb.blob.arrayBuffer(), thumbnailVersion: THUMBNAIL_VERSION });
   }
 }
 
@@ -701,6 +710,48 @@ receiver.onState = (state: ReceiveState) => {
   }
 };
 
+/** Background copy into browser storage (see keep.ts), if one is running. */
+let keeping: AbortController | undefined;
+
+async function startKeeping(file: File): Promise<void> {
+  if (keeping || (await keptCopy(file.name, file.size))) return;
+  const abort = new AbortController();
+  keeping = abort;
+  // Downloads own the card while they run; the copy just continues quietly.
+  const cardFree = () => !receiver.busy && !relayDownload;
+  let lastDraw = 0;
+  const draw = (p: number) => {
+    const now = performance.now();
+    if (!cardFree() || (now - lastDraw < 300 && p < 1)) return;
+    lastDraw = now;
+    transferCard.show({
+      title: `Saving to this device · ${Math.floor(p * 100)}%`,
+      detail: "So it's still in your library next time",
+      progress: p,
+      actions: [{ label: "Don't keep", run: () => abort.abort() }],
+    });
+  };
+  draw(0);
+  const result = await keepOnDevice(file, draw, abort.signal);
+  keeping = undefined;
+  if (!cardFree()) return;
+  if (result === "kept") {
+    transferCard.show({ title: "Saved on this device", detail: file.name, tone: "done" });
+    setTimeout(() => transferCard.hide(), 3000);
+  } else if (result === "too-big") {
+    transferCard.show({
+      title: "Too big to keep in this browser",
+      detail: "Not enough browser storage — pick the file again next time",
+      tone: "warn",
+      actions: [{ label: "OK", run: () => transferCard.hide() }],
+    });
+  } else if (result === "failed") {
+    transferCard.show({ title: "Couldn't save a copy", tone: "warn", actions: [{ label: "OK", run: () => transferCard.hide() }] });
+  } else {
+    transferCard.hide();
+  }
+}
+
 /** See Room.unlockLocalNetwork: Safari needs mic access before it uses the local network. */
 async function speedUpLocal(): Promise<void> {
   localUnlockTried = true;
@@ -967,11 +1018,11 @@ window.addEventListener("drop", (e) => {
     return;
   }
 
-  const dropped = fromDataTransfer(e.dataTransfer);
-  if (dropped) {
+  void fromDataTransfer(e.dataTransfer).then(async (dropped) => {
+    if (!dropped) return;
     library.setVisible(false);
-    void getEntry(entryId(dropped.file)).then((known) => load(dropped, known));
-  }
+    await load(dropped, await getEntry(entryId(dropped.file)));
+  });
 });
 
 // --- render loop ------------------------------------------------------------
@@ -1060,6 +1111,7 @@ const invite: { name?: string; size?: number } | undefined =
 
 // Dev-only: `?src=/path.mp4` loads a file over HTTP without the native picker,
 // so the renderer can be driven from a test harness. Never built into production.
+const devHost = import.meta.env.DEV ? linkParams.get("devhost") : null;
 const devSrc = import.meta.env.DEV && !linkParams.has("get") ? linkParams.get("src") : null;
 if (devSrc) {
   // lastModified must be fixed, or every reload mints a new library entry.
@@ -1070,7 +1122,8 @@ if (devSrc) {
   );
 } else {
   void library.refresh().then(() => {
-    if (invite) return; // the invitation card is the page
+    // An invitation card or a room link is the page; the library would cover it.
+    if (invite || roomFromUrl || devHost) return;
     if (library.isEmpty) showStart();
     else library.setVisible(true);
   });
@@ -1105,10 +1158,10 @@ if (import.meta.env.DEV) {
 // Dev-only: `?devhost=CODE` hosts public/__send.mp4 in that room and shares it
 // from this browser, so a browser that can't be scripted (iOS Safari) can be
 // measured as the sender.
-const devHost = import.meta.env.DEV ? new URLSearchParams(location.search).get("devhost") : null;
 if (devHost) {
   void fetch("/__send.mp4").then(async (r) => {
-    const file = new File([await r.blob()], "concert-360.mp4", { type: "video/mp4", lastModified: 1700000000000 });
+    const name = new URLSearchParams(location.search).get("devname") ?? "concert-360.mp4";
+    const file = new File([await r.blob()], name, { type: "video/mp4", lastModified: 1700000000000 });
     await load({ name: file.name, size: file.size, url: URL.createObjectURL(file), file });
     startRoom(devHost);
     while (!sharedEntryId) await new Promise((r) => setTimeout(r, 100)); // wait for remember()

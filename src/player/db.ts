@@ -23,8 +23,13 @@ export interface LibraryEntry {
   duration?: number;
   width?: number;
   height?: number;
-  thumbnail?: Blob;
-  /** 2 = read through WebGL; older ones may be black on Safari and are redone */
+  /**
+   * JPEG bytes. Stored as an ArrayBuffer, not a Blob: Safari breaks a Blob that
+   * is read from IndexedDB and written back (every re-save of the entry), and
+   * the library then shows a broken image. Older entries may still hold a Blob.
+   */
+  thumbnail?: ArrayBuffer | Blob;
+  /** 3 = WebGL capture stored as bytes; older ones are redone */
   thumbnailVersion?: number;
   /** seconds — where to pick up again */
   resumeAt?: number;
