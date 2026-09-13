@@ -82,6 +82,18 @@ Export writes both required outputs (§5.4, §5.5):
 
 Import works by button or by dropping a sidecar someone sent you onto the window.
 
+**YouTube timestamps.** "Paste timestamps…" takes a chapter list straight from a
+YouTube description — `0:07:47 LOVE (TUMJB)`, `7:47 - LOVE`, `LOVE (7:47)`, with
+blank lines and the rest of the description ignored. It warns if timestamps run
+past the end of the open video. Re-pasting a corrected list keeps the view
+direction of any chapter that lands on the same second. "Copy as timestamps" goes
+the other way. From the CLI:
+
+```bash
+node bin/homecast.mjs chapters from-text setlist.txt -o concert.homecast.json --video master.mp4
+node bin/homecast.mjs prepare master.mp4 -c setlist.txt   # also accepted directly
+```
+
 The page reports what your machine can do *before* you open anything, and names
 the file you should open if the master will not work here — a GPU whose
 `MAX_TEXTURE_SIZE` is under 8192 cannot bind an 8K equirect frame at all

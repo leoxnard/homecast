@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { inspect } from "./inspect.ts";
 import { prepare } from "./prepare.ts";
 import { fallback } from "./fallback.ts";
-import { extractChapters, sidecarToFfmetadata } from "./chapters.ts";
+import { extractChapters, sidecarToFfmetadata, timestampsToSidecar } from "./chapters.ts";
 import { spherical } from "./sphericalCmd.ts";
 import { bold, dim, fail, cyan } from "./log.ts";
 
@@ -18,7 +18,8 @@ ${cyan("homecast prepare")} <input> [options]
     Remux with -c copy (bit-identical, no re-encode), optionally injecting
     chapters, then verify the result with ffprobe.
       -o, --output <file>      default: <input>.homecast.mp4
-      -c, --chapters <file>    a .homecast.json sidecar, or a raw .txt ffmetadata
+      -c, --chapters <file>    a .homecast.json sidecar, an ffmetadata file, or a
+                               YouTube timestamp list — detected by content
           --title <string>     global title tag
           --artist <string>    global artist tag
           --no-retag           keep the source fourcc (default retags hvc1 → hev1)
@@ -44,6 +45,11 @@ ${cyan("homecast spherical")} <file> [--source <original>] [--check]
 
 ${cyan("homecast chapters extract")} <video> [-o <file>]
     Read embedded MP4 chapters back out into a JSON sidecar.
+
+${cyan("homecast chapters from-text")} <timestamps.txt> -o <sidecar.json> [--video <file>]
+    Convert a YouTube-style chapter list ("0:07:47 LOVE") into a sidecar.
+    --video checks the timestamps against the file's duration.
+    \`prepare -c\` also accepts a timestamp list directly.
 
 ${cyan("homecast chapters ffmeta")} <sidecar.json> -o <file>
     Convert a sidecar into an ffmetadata file for \`prepare --chapters\`.
@@ -149,10 +155,16 @@ async function main(argv: string[]): Promise<number> {
       const { values, positionals } = parseArgs({
         args: rest.slice(1),
         allowPositionals: true,
-        options: { output: { type: "string", short: "o" } },
+        options: { output: { type: "string", short: "o" }, video: { type: "string" } },
       });
       if (sub === "extract") {
         await extractChapters(requirePositional(positionals, 0, "<video>"), values.output);
+        return 0;
+      }
+      if (sub === "from-text") {
+        const out = values.output;
+        if (!out) throw new Error("chapters from-text needs -o <sidecar.json>");
+        await timestampsToSidecar(requirePositional(positionals, 0, "<timestamps.txt>"), out, values.video);
         return 0;
       }
       if (sub === "ffmeta") {

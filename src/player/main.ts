@@ -458,7 +458,7 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   if (!e.dataTransfer) return;
 
-  const json = Array.from(e.dataTransfer.files).find((f) => f.name.endsWith(".json"));
+  const json = Array.from(e.dataTransfer.files).find((f) => /\.(json|txt)$/i.test(f.name));
   if (json) {
     void json.text().then((text) => {
       chapterEditor.setChapters(chapters);
@@ -466,7 +466,7 @@ window.addEventListener("drop", (e) => {
         chapters = chapterEditor.getChapters();
         toast(`${chapters.length} chapter${chapters.length === 1 ? "" : "s"} imported`);
       } else {
-        toast("That JSON is not a homecast chapter sidecar", { warn: true });
+        toast("No chapters found — expected a sidecar or a timestamp list", { warn: true });
       }
     });
     return;

@@ -3,7 +3,7 @@ import { basename, resolve } from "node:path";
 import { probe } from "./ffmpeg.ts";
 import { formatDuration } from "./disk.ts";
 import {
-  isChapterSidecar, normaliseChapters, toFfmetadata, sidecarPathFor,
+  isChapterSidecar, normaliseChapters, toFfmetadata, sidecarPathFor, parseTimestampList,
   type Chapter, type ChapterSidecar,
 } from "../shared/chapters.ts";
 import { bold, dim, ok, step, warn } from "./log.ts";
@@ -57,4 +57,44 @@ export async function sidecarToFfmetadata(sidecarPath: string, outPath: string):
   step(`${sidecar.chapters.length} chapters → ffmetadata`);
   await writeFile(resolve(outPath), toFfmetadata(sidecar), "utf8");
   ok(`wrote ${bold(basename(outPath))}`);
+}
+
+export type ChapterFileKind = "sidecar" | "ffmetadata" | "timestamps";
+
+/** Decide by content, not extension — a `.txt` can be either text format. */
+export async function sniffChapterFile(path: string): Promise<ChapterFileKind> {
+  const text = await readFile(resolve(path), "utf8");
+  if (text.trimStart().startsWith(";FFMETADATA1")) return "ffmetadata";
+  try {
+    JSON.parse(text);
+    return "sidecar";
+  } catch {
+    return "timestamps";
+  }
+}
+
+/** A pasted YouTube chapter list, as a sidecar. */
+export async function loadTimestampList(path: string): Promise<ChapterSidecar> {
+  const { chapters, skipped } = parseTimestampList(await readFile(resolve(path), "utf8"));
+  if (!chapters.length) throw new Error(`${path}: no timestamps found (expected lines like "0:07:47 LOVE")`);
+  step(`${chapters.length} chapters from timestamp list${skipped.length ? dim(` (${skipped.length} other lines ignored)`) : ""}`);
+  return { version: 1, chapters };
+}
+
+/** `homecast chapters from-text list.txt -o video.homecast.json` */
+export async function timestampsToSidecar(textPath: string, outPath: string, video?: string): Promise<void> {
+  const sidecar = await loadTimestampList(textPath);
+  if (video) {
+    const p = await probe(video);
+    sidecar.video = basename(video);
+    const duration = Number(p.format.duration ?? 0);
+    if (duration) {
+      sidecar.duration = duration;
+      const beyond = sidecar.chapters.filter((c) => c.start > duration);
+      if (beyond.length) warn(`${beyond.length} chapter(s) start after the video ends (${formatDuration(duration)}) — wrong file?`);
+    }
+  }
+  await saveSidecar(outPath, sidecar);
+  ok(`wrote ${bold(basename(outPath))}`);
+  for (const c of sidecar.chapters) console.log(`  ${dim(formatDuration(c.start).padStart(8))}  ${c.title}`);
 }

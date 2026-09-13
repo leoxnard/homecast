@@ -621,3 +621,23 @@ html, body {
 /* Hide the player chrome while a takeover sheet is up — there is nothing to
    transport-control yet, and the buttons showed through the panel edge. */
 body.has-takeover .hud { opacity: 0; pointer-events: none; }
+
+/* --- timestamp paste ------------------------------------------------------ */
+.paste-box { margin: 10px 0 14px; display: flex; flex-direction: column; gap: 8px; }
+.paste-area {
+  width: 100%;
+  font-family: var(--hud-font);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  padding: 9px 11px;
+  resize: vertical;
+}
+.paste-area:focus { outline: none; border-color: var(--accent); }
+.paste-preview { font-size: 12px; min-height: 18px; }
+.btn.primary-small { background: var(--accent); border-color: var(--accent); color: #04203f; font-weight: 600; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.panel .actions { flex-wrap: wrap; }

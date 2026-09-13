@@ -10,7 +10,7 @@
  * and VLC cannot load an external chapter file (§5.4, §5.5).
  */
 import {
-  normaliseChapters, toFfmetadata, sidecarPathFor,
+  normaliseChapters, toFfmetadata, sidecarPathFor, parseTimestampList, toTimestampList,
   type Chapter, type ChapterSidecar, type ViewDirection,
 } from "../shared/chapters.ts";
 import { formatTime } from "./format.ts";
@@ -51,6 +51,11 @@ export class ChapterEditor {
   private readonly list: HTMLElement;
   private readonly summary: HTMLElement;
   private chapters: Chapter[] = [];
+  private readonly paste: HTMLElement;
+  private pasteArea!: HTMLTextAreaElement;
+  private pastePreview!: HTMLElement;
+  private pasteReplace!: HTMLButtonElement;
+  private pasteMerge!: HTMLButtonElement;
 
   constructor(cb: ChapterEditorCallbacks) {
     this.cb = cb;
@@ -75,7 +80,14 @@ export class ChapterEditor {
     exportMeta.addEventListener("click", () => this.exportFfmetadata());
     const importBtn = el("button", "btn", "Import…");
     importBtn.addEventListener("click", () => this.importSidecar());
-    actions.append(mark, exportJson, exportMeta, importBtn);
+    const pasteBtn = el("button", "btn", "Paste timestamps…");
+    pasteBtn.addEventListener("click", () => this.togglePaste(true));
+    const copyYt = el("button", "btn", "Copy as timestamps");
+    copyYt.title = "Copy in YouTube description format";
+    copyYt.addEventListener("click", () => this.copyTimestamps(copyYt));
+    actions.append(mark, pasteBtn, importBtn, exportJson, exportMeta, copyYt);
+
+    this.paste = this.buildPasteBox();
 
     const note = el(
       "p",
@@ -85,7 +97,111 @@ export class ChapterEditor {
         "so VLC and QuickTime see them too.",
     );
 
-    this.root.append(header, this.summary, this.list, actions, note);
+    this.root.append(header, this.summary, this.paste, this.list, actions, note);
+  }
+
+  // --- YouTube-style timestamp import ------------------------------------
+
+  private buildPasteBox(): HTMLElement {
+    const box = el("div", "paste-box");
+    box.hidden = true;
+
+    this.pasteArea = el("textarea", "paste-area");
+    this.pasteArea.rows = 8;
+    this.pasteArea.spellcheck = false;
+    this.pasteArea.placeholder =
+      "Paste a YouTube chapter list, e.g.\n\n0:00:00 Fanfare for The Common Man\n0:07:47 LOVE\n1:06:23 Boom Boom";
+    this.pasteArea.addEventListener("input", () => this.previewPaste());
+
+    this.pastePreview = el("div", "paste-preview dim-text");
+
+    const row = el("div", "room-actions");
+    this.pasteReplace = el("button", "btn primary-small", "Replace chapters");
+    this.pasteReplace.addEventListener("click", () => this.applyPaste("replace"));
+    this.pasteMerge = el("button", "btn", "Add to existing");
+    this.pasteMerge.addEventListener("click", () => this.applyPaste("merge"));
+    const cancel = el("button", "btn ghost", "Cancel");
+    cancel.addEventListener("click", () => this.togglePaste(false));
+    row.append(this.pasteReplace, this.pasteMerge, cancel);
+
+    box.append(this.pasteArea, this.pastePreview, row);
+    return box;
+  }
+
+  private togglePaste(show: boolean): void {
+    this.paste.hidden = !show;
+    if (show) {
+      this.pasteArea.value = "";
+      this.previewPaste();
+      this.pasteArea.focus();
+    }
+  }
+
+  private previewPaste(): void {
+    const { chapters, skipped } = parseTimestampList(this.pasteArea.value);
+    const { duration } = this.cb.meta();
+    const beyond = duration ? chapters.filter((c) => c.start > duration).length : 0;
+
+    const parts: string[] = [];
+    if (!this.pasteArea.value.trim()) parts.push("Timestamps can be H:MM:SS or M:SS, at the start or end of a line.");
+    else if (!chapters.length) parts.push("No timestamps found.");
+    else {
+      const first = chapters[0], last = chapters.at(-1);
+      parts.push(
+        `${chapters.length} chapter${chapters.length === 1 ? "" : "s"} found` +
+          (first && last && chapters.length > 1 ? ` — “${first.title}” to “${last.title}”` : ""),
+      );
+      if (skipped.length) parts.push(`${skipped.length} line${skipped.length === 1 ? "" : "s"} without a timestamp ignored`);
+      if (beyond) parts.push(`⚠ ${beyond} start after the end of this video — wrong file?`);
+      if (first && first.start > 0) parts.push("first chapter doesn't start at 0:00");
+    }
+    this.pastePreview.textContent = parts.join(" · ");
+    this.pastePreview.classList.toggle("warn-text", beyond > 0);
+
+    const disabled = chapters.length === 0;
+    this.pasteReplace.disabled = disabled;
+    this.pasteMerge.disabled = disabled;
+    const n = this.chapters.length;
+    this.pasteReplace.textContent = n ? `Replace ${n} chapter${n === 1 ? "" : "s"}` : "Import chapters";
+    this.pasteMerge.hidden = this.chapters.length === 0;
+  }
+
+  private applyPaste(mode: "replace" | "merge"): void {
+    const { chapters: pasted } = parseTimestampList(this.pasteArea.value);
+    if (!pasted.length) return;
+
+    // A pasted chapter landing within a second of an existing one keeps that
+    // chapter's captured view direction — YouTube lists carry titles only, and
+    // re-importing a corrected list should not throw the authored views away.
+    const withViews = pasted.map((c) => {
+      const match = this.chapters.find((e) => e.view && Math.abs(e.start - c.start) <= 1);
+      return match?.view ? { ...c, view: match.view } : c;
+    });
+
+    let next: Chapter[];
+    if (mode === "replace") next = withViews;
+    else {
+      const kept = this.chapters.filter((e) => !withViews.some((c) => Math.abs(c.start - e.start) <= 1));
+      next = [...kept, ...withViews];
+    }
+    this.chapters = normaliseChapters(next);
+    this.togglePaste(false);
+    this.commit();
+  }
+
+  private copyTimestamps(button: HTMLButtonElement): void {
+    if (!this.chapters.length) return;
+    const text = toTimestampList(this.chapters);
+    const done = () => {
+      const label = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = label), 1500);
+    };
+    void navigator.clipboard?.writeText(text).then(done, () => {
+      this.togglePaste(true);
+      this.pasteArea.value = text;
+      this.pasteArea.select();
+    });
   }
 
   setChapters(chapters: Chapter[]): void {
@@ -200,7 +316,7 @@ export class ChapterEditor {
   private importSidecar(): void {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".json,application/json";
+    input.accept = ".json,.txt,application/json,text/plain";
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (file) void file.text().then((text) => this.ingest(text));
@@ -209,6 +325,7 @@ export class ChapterEditor {
   }
 
   /** Shared by the import button and by dropping a sidecar on the window. */
+  /** Accepts a sidecar JSON or a plain YouTube-style timestamp list. */
   ingest(text: string): boolean {
     try {
       const parsed: unknown = JSON.parse(text);
@@ -219,7 +336,11 @@ export class ChapterEditor {
       this.cb.onChange(this.chapters);
       return true;
     } catch {
-      return false;
+      const { chapters } = parseTimestampList(text);
+      if (!chapters.length) return false;
+      this.setChapters(chapters);
+      this.cb.onChange(this.chapters);
+      return true;
     }
   }
 }

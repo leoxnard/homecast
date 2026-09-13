@@ -102,3 +102,86 @@ export function toFfmetadata(sidecar: ChapterSidecar): string {
 function escapeFfmetadata(s: string): string {
   return s.replace(/([=;#\\])/g, "\\$1").replace(/\n/g, "\\\n");
 }
+
+// ---------------------------------------------------------------------------
+// YouTube-style timestamp lists
+// ---------------------------------------------------------------------------
+
+export interface TimestampParse {
+  chapters: Chapter[];
+  /** lines that looked like content but had no usable timestamp */
+  skipped: string[];
+}
+
+/** `1:02:03`, `02:03` or `2:03` → seconds; undefined if it is not a timestamp. */
+export function parseTimestamp(raw: string): number | undefined {
+  const parts = raw.split(":");
+  if (parts.length < 2 || parts.length > 3) return undefined;
+  if (!parts.every((p) => /^\d{1,3}$/.test(p))) return undefined;
+  const nums = parts.map(Number);
+  const [s, m, h] = [nums.at(-1) ?? 0, nums.at(-2) ?? 0, parts.length === 3 ? (nums[0] ?? 0) : 0];
+  // Seconds and minutes past a larger unit must be < 60, or `1:75` would silently
+  // become 2:15 rather than being flagged as a typo.
+  if (s >= 60 || (parts.length === 3 && m >= 60)) return undefined;
+  return h * 3600 + m * 60 + s;
+}
+
+const TIME = String.raw`\d{1,3}(?::\d{1,2}){1,2}`;
+/** Timestamp first: `0:07:47 LOVE`, `[7:47] - LOVE`, `7:47 | LOVE`. */
+const LEADING = new RegExp(String.raw`^[\[(]?(${TIME})[\])]?\s*(?:[-–—|:.]\s*)?(.*)$`);
+/** Timestamp last: `LOVE - 7:47`, `LOVE (7:47)`. */
+const TRAILING = new RegExp(String.raw`^(.*?)\s*(?:[-–—|:]\s*)?[\[(]?(${TIME})[\])]?$`);
+
+/**
+ * Parse a pasted YouTube description chapter list. Blank lines and lines with
+ * no timestamp are ignored, so the surrounding description can be pasted whole.
+ * Result is sorted with duplicate start times collapsed.
+ */
+export function parseTimestampList(text: string): TimestampParse {
+  const found: Chapter[] = [];
+  const skipped: string[] = [];
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/^\s*(?:[-*•▶►]|\d+[.)])\s+/, "").trim();
+    if (!line) continue;
+
+    let time: number | undefined;
+    let title = "";
+    const lead = LEADING.exec(line);
+    if (lead?.[1] !== undefined) {
+      time = parseTimestamp(lead[1]);
+      title = lead[2] ?? "";
+    }
+    if (time === undefined) {
+      const trail = TRAILING.exec(line);
+      if (trail?.[2] !== undefined) {
+        time = parseTimestamp(trail[2]);
+        title = trail[1] ?? "";
+      }
+    }
+    if (time === undefined) {
+      skipped.push(rawLine.trim());
+      continue;
+    }
+    title = title.replace(/^[-–—|:.\s]+|[-–—|:.\s]+$/g, "").trim();
+    found.push({ start: time, title: title || `Chapter at ${rawLine.trim()}` });
+  }
+
+  const byStart = new Map<number, Chapter>();
+  for (const c of found) if (!byStart.has(c.start)) byStart.set(c.start, c);
+  return { chapters: normaliseChapters([...byStart.values()]), skipped };
+}
+
+/** Render chapters back as a YouTube description list (always H:MM:SS if long). */
+export function toTimestampList(chapters: Chapter[]): string {
+  const long = chapters.some((c) => c.start >= 3600);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return normaliseChapters(chapters)
+    .map((c) => {
+      const t = Math.floor(c.start);
+      const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+      const stamp = long ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+      return `${stamp} ${c.title}`;
+    })
+    .join("\n");
+}

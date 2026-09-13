@@ -5,7 +5,7 @@ import {
   ffmpegPath, probe, runOrThrow, videoStream, hasSphericalMetadata, type ProbeResult,
 } from "./ffmpeg.ts";
 import { checkFreeSpace, formatBytes, formatDuration } from "./disk.ts";
-import { loadSidecar } from "./chapters.ts";
+import { loadSidecar, loadTimestampList, sniffChapterFile } from "./chapters.ts";
 import { ensureSpherical } from "./spherical.ts";
 import { toFfmetadata, type ChapterSidecar } from "../shared/chapters.ts";
 import { bold, dim, green, yellow, ok, warn, step, table, progress, progressDone, info } from "./log.ts";
@@ -80,11 +80,10 @@ export async function prepare(opts: PrepareOptions): Promise<void> {
   let tempDir: string | undefined;
 
   if (opts.chapters) {
-    if (opts.chapters.endsWith(".txt") || opts.chapters.endsWith(".ffmeta")) {
-      metadataFile = resolve(opts.chapters);
-    } else {
-      sidecar = await loadSidecar(opts.chapters);
-    }
+    const kind = await sniffChapterFile(opts.chapters);
+    if (kind === "ffmetadata") metadataFile = resolve(opts.chapters);
+    else if (kind === "timestamps") sidecar = await loadTimestampList(opts.chapters);
+    else sidecar = await loadSidecar(opts.chapters);
   }
   if (opts.title || opts.artist) {
     sidecar = {
