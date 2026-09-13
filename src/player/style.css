@@ -690,3 +690,22 @@ body.has-takeover .hud { opacity: 0; pointer-events: none; }
   background: var(--accent);
   border-radius: 4px;
 }
+
+/* --- share link --------------------------------------------------------- */
+.share-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.09); }
+.share-input { flex: 1; min-width: 0; color: var(--fg); }
+.share-input.invalid { border-color: var(--danger); }
+.share-input:disabled { opacity: 0.5; }
+.dim-text.small { font-size: 11.5px; margin: 4px 0 0; }
+.download-link { color: var(--accent); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.download-link:hover { text-decoration: underline; }
+.get-file {
+  margin: 10px 0;
+  padding: 11px 13px;
+  border-radius: 9px;
+  background: rgba(77, 163, 255, 0.1);
+  border: 1px solid rgba(77, 163, 255, 0.35);
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 13px;
+}
+.get-file .download-link { font-size: 14px; font-weight: 600; }

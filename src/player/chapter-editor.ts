@@ -21,7 +21,9 @@ export interface ChapterEditorCallbacks {
   onClose: () => void;
   /** current playhead and view, read at the moment a marker is dropped */
   readState: () => { time: number; view: ViewDirection };
-  meta: () => { videoName: string; duration: number; title?: string; artist?: string };
+  meta: () => { videoName: string; duration: number; title?: string; artist?: string; shareUrl?: string };
+  /** a sidecar that arrived with a download link */
+  onShareUrl?: (url: string) => void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -287,12 +289,13 @@ export class ChapterEditor {
   }
 
   private sidecar(): ChapterSidecar {
-    const { videoName, duration, title, artist } = this.cb.meta();
+    const { videoName, duration, title, artist, shareUrl } = this.cb.meta();
     return {
       version: 1,
       video: videoName,
       ...(title ? { title } : {}),
       ...(artist ? { artist } : {}),
+      ...(shareUrl ? { shareUrl } : {}),
       duration: duration || undefined,
       chapters: this.chapters,
     };
@@ -332,6 +335,7 @@ export class ChapterEditor {
       if (typeof parsed !== "object" || parsed === null) return false;
       const candidate = parsed as ChapterSidecar;
       if (candidate.version !== 1 || !Array.isArray(candidate.chapters)) return false;
+      if (typeof candidate.shareUrl === "string") this.cb.onShareUrl?.(candidate.shareUrl);
       this.setChapters(candidate.chapters);
       this.cb.onChange(this.chapters);
       return true;

@@ -84,6 +84,23 @@ export interface HelloMessage {
   /** basename only — never a path (§1) */
   file?: string;
   duration?: number;
+  /**
+   * Where to download the same file (Pingvin, Google Drive, …). Only a link:
+   * the video itself never travels through homecast (§1, §2). Untrusted on
+   * receipt — render only after `safeHttpUrl`.
+   */
+  shareUrl?: string;
+}
+
+/** Accept only http(s) URLs from a peer; anything else (javascript:, data:) is dropped. */
+export function safeHttpUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw.length > 2048) return undefined;
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export type SyncMessage = ClockPing | ClockPong | StateMessage | ControlMessage | ViewMessage | HelloMessage;

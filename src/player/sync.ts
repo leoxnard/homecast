@@ -38,7 +38,7 @@ export interface SyncHooks {
   onGaze: (gazes: PeerGaze[]) => void;
   onNotice: (message: string, warn?: boolean) => void;
   /** file name + duration advertised to peers, to catch mismatched files */
-  identity: () => { name: string; file?: string; duration?: number };
+  identity: () => { name: string; file?: string; duration?: number; shareUrl?: string };
 }
 
 interface PeerClock {
@@ -103,8 +103,14 @@ export class Sync {
   /** Say hello and start measuring the clock offset. */
   greet(peerId: string): void {
     const id = this.hooks.identity();
-    this.room.sendTo(peerId, { type: "hello", name: id.name, file: id.file, duration: id.duration });
+    this.room.sendTo(peerId, { type: "hello", name: id.name, file: id.file, duration: id.duration, shareUrl: id.shareUrl });
     this.room.sendTo(peerId, { type: "clock-ping", c0: Date.now() });
+  }
+
+  /** Re-send who we are — after opening a file or changing the share link. */
+  announce(): void {
+    const id = this.hooks.identity();
+    this.room.broadcastControl({ type: "hello", name: id.name, file: id.file, duration: id.duration, shareUrl: id.shareUrl });
   }
 
   private probeClocks(): void {

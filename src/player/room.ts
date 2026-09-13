@@ -9,7 +9,7 @@
  *   control — ordered and reliable: play, pause, seek. Losing one desyncs.
  *   view    — unordered, no retransmits: gaze at 20 Hz. A late one is worthless.
  */
-import type { ServerSignal, SyncMessage } from "../shared/protocol.ts";
+import { safeHttpUrl, type ServerSignal, type SyncMessage } from "../shared/protocol.ts";
 
 /**
  * STUN only. A direct path works for the common case of two home connections;
@@ -27,6 +27,8 @@ export interface PeerInfo {
   name?: string;
   file?: string;
   duration?: number;
+  /** validated http(s) download link the peer shared, if any */
+  shareUrl?: string;
   connectionState: RTCPeerConnectionState;
   /** round-trip time over the data channel, ms */
   rtt?: number;
@@ -231,6 +233,7 @@ export class Room {
         link.info.name = message.name;
         link.info.file = message.file;
         link.info.duration = message.duration;
+        link.info.shareUrl = safeHttpUrl(message.shareUrl);
         this.emitPeers();
       }
       this.cb.onMessage(link.id, message);

@@ -34,6 +34,8 @@ export interface ChapterSidecar {
   artist?: string;
   /** seconds — needed to give the final chapter an END; may be omitted on import */
   duration?: number;
+  /** where others can download the same video, so it travels with the chapters */
+  shareUrl?: string;
   chapters: Chapter[];
 }
 

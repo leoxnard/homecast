@@ -26,7 +26,7 @@ import { Room, type PeerInfo, type RoomStatus } from "./room.ts";
 import { Sync, type PeerGaze } from "./sync.ts";
 import { Presence } from "./presence.ts";
 import { RoomPanel } from "./room-panel.ts";
-import { ROOM_PATH } from "../shared/protocol.ts";
+import { ROOM_PATH, safeHttpUrl } from "../shared/protocol.ts";
 
 const canvasElement = document.querySelector<HTMLCanvasElement>("#view");
 if (!canvasElement) throw new Error("#view canvas missing");
@@ -139,11 +139,13 @@ const chapterEditor = new ChapterEditor({
   onJump: (index) => jumpToChapter(index),
   onClose: closePanel,
   readState: () => ({ time: video.currentTime, view: viewer.state }),
+  onShareUrl: (url) => void setShareUrl(url),
   meta: () => ({
     videoName: opened?.name ?? "video.mp4",
     duration: Number.isFinite(video.duration) ? video.duration : 0,
     title: entry?.title,
     artist: entry?.artist,
+    shareUrl: entry?.shareUrl,
   }),
 });
 
@@ -218,12 +220,16 @@ async function remember(): Promise<void> {
     chapters: chapters.length ? chapters : (existing?.chapters ?? []),
     title: existing?.title,
     artist: existing?.artist,
+    shareUrl: existing?.shareUrl,
     addedAt: existing?.addedAt ?? now,
     lastOpenedAt: now,
   };
   entry = record;
   chapters = record.chapters;
   await putEntry(record);
+  // Peers only heard our identity at connect time; now there is a file to describe.
+  roomPanel.setMyFile(opened?.name, record.shareUrl);
+  sync.announce();
 
   // Resume from whatever the store actually holds. Deciding it here rather than
   // in load() means it works the same however the file was opened.
@@ -328,6 +334,7 @@ const sync = new Sync(room, {
     name: "viewer",
     file: opened?.name,
     duration: Number.isFinite(video.duration) ? video.duration : undefined,
+    shareUrl: entry?.shareUrl,
   }),
 });
 
@@ -341,7 +348,20 @@ const roomPanel = new RoomPanel({
   },
   onResync: () => sync.resync(),
   onClose: closePanel,
+  onShareUrl: (raw) => void setShareUrl(raw),
 });
+
+/** Save the download link for the open file and tell everyone in the room. */
+async function setShareUrl(raw: string): Promise<void> {
+  if (!entry) return void toast("Open a video first", { warn: true });
+  const url = raw ? safeHttpUrl(raw) : undefined;
+  if (raw && !url) return void toast("That doesn't look like a web link", { warn: true });
+  entry = { ...entry, shareUrl: url };
+  await patchEntry(entry.id, { shareUrl: url });
+  roomPanel.setMyFile(opened?.name, url);
+  sync.announce();
+  toast(url ? "Download link shared with the room" : "Download link removed");
+}
 
 /** Same alphabet as the server (no 0/O/1/I/L). */
 function randomRoomCode(): string {
@@ -372,6 +392,7 @@ function leaveRoom(): void {
 }
 
 function showRoom(): void {
+  roomPanel.setMyFile(opened?.name, entry?.shareUrl);
   showPanel(roomPanel.root);
 }
 

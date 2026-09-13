@@ -184,6 +184,13 @@ a WebRTC data channel. The video itself never moves.
   decoder falls behind.
 - If your files differ in length, it says so rather than letting you wonder why
   nothing lines up.
+- **Share a download link** for your file (Pingvin, Google Drive, …) in the room
+  panel. Anyone who joins without the file sees where to get it. Only the link is
+  sent; the video never goes through homecast. The link is saved with the video
+  and included in exported chapter sidecars.
+
+  If you host the file on the home server, mind PLAN §2: one master is ~88 GB on
+  a single, non-expandable disk that the other containers share.
 
 Connections are direct, so a strict NAT or corporate firewall can prevent one
 forming. There is no TURN relay, because relaying would mean routing your traffic

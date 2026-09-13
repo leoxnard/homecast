@@ -1,5 +1,5 @@
 /** Watch-together UI: room code, peers, view lock, resync (PLAN §4.3, M5). */
-import { ROOM_PATH } from "../shared/protocol.ts";
+import { ROOM_PATH, safeHttpUrl } from "../shared/protocol.ts";
 import type { PeerInfo, RoomStatus } from "./room.ts";
 import { connectionNote } from "./room.ts";
 
@@ -10,6 +10,8 @@ export interface RoomPanelCallbacks {
   onToggleViewLock: (locked: boolean) => void;
   onResync: () => void;
   onClose: () => void;
+  /** save (or clear, with "") the download link for the file you have open */
+  onShareUrl: (url: string) => void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -34,6 +36,10 @@ export class RoomPanel {
   private readonly peerList: HTMLElement;
   private readonly lockToggle: HTMLInputElement;
   private readonly codeInput: HTMLInputElement;
+  private readonly shareInput: HTMLInputElement;
+  private readonly shareSave: HTMLButtonElement;
+  private readonly shareLabel: HTMLElement;
+  private readonly getFile: HTMLElement;
 
   constructor(cb: RoomPanelCallbacks) {
     this.cb = cb;
@@ -116,11 +122,59 @@ export class RoomPanel {
     const controls = el("div", "room-actions");
     controls.append(lockLabel, el("div", "spacer"), resync, leave);
 
-    this.active.append(codeWrap, linkRow, this.statusEl, this.peerList, controls);
+    // --- where to get the file ------------------------------------------
+    this.getFile = el("div", "get-file");
+    this.getFile.hidden = true;
+
+    const share = el("div", "share-box");
+    this.shareLabel = el("div", "dim-text", "Download link for your file");
+    this.shareInput = el("input", "room-link share-input");
+    this.shareInput.type = "url";
+    this.shareInput.placeholder = "https://share… (Pingvin, Google Drive, …)";
+    this.shareInput.spellcheck = false;
+    this.shareInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.saveShare();
+      e.stopPropagation();
+    });
+    this.shareSave = el("button", "btn", "Share link");
+    this.shareSave.addEventListener("click", () => this.saveShare());
+    const shareRow = el("div", "room-actions");
+    shareRow.append(this.shareInput, this.shareSave);
+    share.append(
+      this.shareLabel,
+      shareRow,
+      el("p", "dim-text small",
+        "Only the link is sent to the others in the room. The video itself never goes through homecast."),
+    );
+
+    this.active.append(codeWrap, linkRow, this.statusEl, this.getFile, this.peerList, share, controls);
 
     const note = el("p", "dim-text", connectionNote);
     this.root.append(header, this.idle, this.active, note);
   }
+
+  private saveShare(): void {
+    const raw = this.shareInput.value.trim();
+    if (raw && !safeHttpUrl(raw)) {
+      this.shareInput.classList.add("invalid");
+      return;
+    }
+    this.shareInput.classList.remove("invalid");
+    this.cb.onShareUrl(raw);
+  }
+
+  /** Reflect the file you have open and its saved link. */
+  setMyFile(name: string | undefined, shareUrl: string | undefined): void {
+    const hasFile = !!name;
+    this.shareInput.disabled = !hasFile;
+    this.shareSave.disabled = !hasFile;
+    this.shareLabel.textContent = hasFile ? `Download link for ${name}` : "Open a video to share a download link for it";
+    if (document.activeElement !== this.shareInput) this.shareInput.value = shareUrl ?? "";
+    this.shareSave.textContent = shareUrl ? "Update link" : "Share link";
+    this.hasOwnFile = hasFile;
+  }
+
+  private hasOwnFile = false;
 
   setRoom(code: string): void {
     this.idle.hidden = true;
@@ -149,11 +203,24 @@ export class RoomPanel {
 
   setPeers(peers: PeerInfo[]): void {
     this.peerList.replaceChildren();
-    if (!peers.length) return;
+
+    // Arrived without the file? Put the way to get it front and centre.
+    const withLink = peers.find((p) => p.shareUrl);
+    this.getFile.replaceChildren();
+    this.getFile.hidden = this.hasOwnFile || !withLink;
+    if (withLink?.shareUrl && !this.hasOwnFile) {
+      this.getFile.append(
+        el("div", undefined, withLink.file ? `They're watching ${withLink.file}` : "They shared the video"),
+        downloadLink(withLink.shareUrl, "Download it"),
+        el("div", "dim-text small", "Then open it here — playback syncs once it's loaded."),
+      );
+    }
+
     for (const peer of peers) {
       const row = el("div", "peer-row");
       row.append(el("span", "peer-dot " + peer.connectionState));
       row.append(el("span", "peer-name", peer.file ?? peer.name ?? peer.id));
+      if (peer.shareUrl) row.append(downloadLink(peer.shareUrl, "download"));
       const meta: string[] = [peer.connectionState];
       if (peer.rtt !== undefined) meta.push(`${Math.round(peer.rtt)} ms`);
       row.append(el("span", "peer-meta", meta.join(" · ")));
@@ -164,4 +231,27 @@ export class RoomPanel {
   setViewLocked(locked: boolean): void {
     this.lockToggle.checked = locked;
   }
+}
+
+/**
+ * A link a *peer* sent. It is revalidated here even though the room already
+ * did, opens in a new tab, and passes no referrer or window handle back.
+ */
+function downloadLink(raw: string, label: string): HTMLElement {
+  const href = safeHttpUrl(raw);
+  if (!href) return document.createElement("span");
+  const a = document.createElement("a");
+  a.className = "download-link";
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  let host = "";
+  try {
+    host = new URL(href).host;
+  } catch {
+    /* validated above */
+  }
+  a.textContent = host ? `${label} (${host})` : label;
+  a.title = href;
+  return a;
 }

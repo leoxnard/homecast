@@ -28,6 +28,8 @@ export interface LibraryEntry {
   chapters: Chapter[];
   title?: string;
   artist?: string;
+  /** download link for this file (Pingvin, Drive, …) shown to people in a room */
+  shareUrl?: string;
   addedAt: number;
   lastOpenedAt: number;
 }
