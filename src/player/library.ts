@@ -30,6 +30,8 @@ export class Library {
   private readonly empty: HTMLElement;
   private readonly objectUrls: string[] = [];
   private hasEntries = false;
+  private currentId?: string;
+  private currentPlaying = false;
 
   constructor(cb: LibraryCallbacks) {
     this.cb = cb;
@@ -57,6 +59,12 @@ export class Library {
     );
 
     this.root.append(header, this.grid, this.empty);
+  }
+
+  /** Which entry is loaded in the player, so its card can say so. */
+  setCurrent(id: string | undefined, playing: boolean): void {
+    this.currentId = id;
+    this.currentPlaying = playing;
   }
 
   async refresh(): Promise<void> {
@@ -97,6 +105,11 @@ export class Library {
       fill.style.width = `${Math.min(100, (entry.resumeAt / entry.duration) * 100)}%`;
       bar.append(fill);
       thumb.append(bar);
+    }
+
+    if (entry.id === this.currentId) {
+      card.classList.add("current");
+      thumb.append(el("div", "card-now", this.currentPlaying ? "▶ Playing" : "❚❚ Open"));
     }
 
     const body = el("div", "card-body");

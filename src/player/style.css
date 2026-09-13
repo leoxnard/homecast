@@ -678,3 +678,15 @@ body.has-takeover .hud { opacity: 0; pointer-events: none; }
   color: var(--dim);
 }
 .hover-title[hidden] + .hover-time { margin-top: 0; color: var(--fg); }
+
+.card.current { border-color: var(--accent); }
+.card-now {
+  position: absolute;
+  left: 7px; top: 7px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #04203f;
+  background: var(--accent);
+  border-radius: 4px;
+}

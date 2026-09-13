@@ -89,6 +89,7 @@ document.body.append(library.root);
 
 async function showLibrary(): Promise<void> {
   closePanel();
+  library.setCurrent(opened ? entry?.id : undefined, !video.paused);
   await library.refresh();
   library.setVisible(true);
 }
@@ -98,7 +99,18 @@ async function showLibrary(): Promise<void> {
  * permission does not necessarily — `requestPermission` needs a user gesture,
  * which is why this only ever runs from a click (M3).
  */
+/** True when `id` is the file already loaded — reopening it should not restart it. */
+function isCurrent(id: string | undefined): boolean {
+  return !!id && !!opened && entry?.id === id;
+}
+
 async function openFromLibrary(e: LibraryEntry): Promise<void> {
+  // Picking the video that is already playing just returns to it: reloading
+  // would stop the music, re-seek to the saved position and reset the view.
+  if (isCurrent(e.id)) {
+    library.setVisible(false);
+    return;
+  }
   if (!e.handle) {
     toast("That file was dropped rather than picked, so it cannot be reopened automatically", { warn: true, ms: 6000 });
     return void openFile();
@@ -160,6 +172,13 @@ async function openFile(): Promise<void> {
 }
 
 async function load(next: OpenedVideo, known?: LibraryEntry): Promise<void> {
+  // The same file re-picked or dropped again: keep playing, drop the new handle.
+  if (isCurrent(known?.id)) {
+    revoke(next);
+    closePanel();
+    library.setVisible(false);
+    return;
+  }
   closePanel();
   persistResume();
   revoke(opened);
