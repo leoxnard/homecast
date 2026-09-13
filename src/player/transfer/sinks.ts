@@ -92,8 +92,54 @@ export async function openBrowserStorageSink(name: string, resume: boolean): Pro
   // Ask the browser not to evict a very large file under storage pressure.
   void navigator.storage.persist?.().catch(() => false);
   const handle = await opfsHandle(name, true);
+  if (!("createWritable" in handle)) return workerSink(name, handle, resume);
   const existing = resume ? (await handle.getFile()).size : 0;
   return streamSink("browser-storage", handle, existing);
+}
+
+/** Safari before 26 has no `createWritable`; write through a worker's sync handle. */
+async function workerSink(name: string, handle: FileSystemFileHandle, resume: boolean): Promise<Sink> {
+  const worker = new Worker(new URL("./opfs-worker.ts", import.meta.url), { type: "module" });
+  // One request at a time; the receiver already chains its writes.
+  let queue: Promise<unknown> = Promise.resolve();
+  const call = <T>(message: unknown, transfer: Transferable[] = []): Promise<T> => {
+    const next = queue.then(
+      () =>
+        new Promise<T>((resolve, reject) => {
+          worker.onmessage = (e: MessageEvent<{ ok: boolean; error?: string } & T>) =>
+            e.data.ok ? resolve(e.data) : reject(new Error(e.data.error));
+          worker.onerror = (e) => reject(new Error(e.message || "storage worker failed"));
+          worker.postMessage(message, transfer);
+        }),
+    );
+    queue = next.catch(() => {});
+    return next;
+  };
+  let offset: number;
+  try {
+    ({ offset } = await call<{ offset: number }>({ op: "open", dir: OPFS_DIR, name: safeFileName(name), resume }));
+  } catch (err) {
+    worker.terminate();
+    throw err;
+  }
+  let finished = false;
+  return {
+    kind: "browser-storage",
+    offset,
+    write: (chunk) => call({ op: "write", data: chunk }, [chunk]),
+    async close() {
+      finished = true;
+      await call({ op: "close" });
+      worker.terminate();
+      return { file: await handle.getFile(), handle };
+    },
+    async abort() {
+      if (finished) return;
+      finished = true;
+      await call({ op: "close" }).catch(() => {});
+      worker.terminate();
+    },
+  };
 }
 
 /** A fully received copy already in browser storage, if any. */
