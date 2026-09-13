@@ -352,13 +352,6 @@ const room = new Room({
 // --- host → friend video transfer --------------------------------------------
 
 const sender = new FileSender(room);
-/**
- * Never send a video through a TURN relay: relayed bytes count against the
- * owner's quota (Cloudflare: 1,000 GB/month free), and one master is ~88 GB.
- * The relay is for keeping playback in sync, which is a few KB.
- */
-const overRelay = async (peer: string): Promise<boolean> => (await room.route(peer))?.kind === "relay";
-sender.canSend = async (peer) => !(await overRelay(peer));
 const receiver = new FileReceiver(room);
 const transferCard = new TransferCard();
 document.body.append(transferCard.root);
@@ -587,15 +580,6 @@ async function startReceive(fromClick: boolean, prefer?: "disk"): Promise<void> 
   const target = pendingOffer;
   if (!target) return;
   const { from, offer } = target;
-  if (!relayPath(offer.url) && (await overRelay(from))) {
-    transferCard.show({
-      title: "Can't download directly",
-      detail: "Your devices are only connected through the relay, which is for syncing, not for sending the video. Ask the host to share it via Pingvin.",
-      tone: "warn",
-      actions: [{ label: "Try again", run: () => void startReceive(true) }],
-    });
-    return;
-  }
 
   let sink: Sink | undefined;
   try {
