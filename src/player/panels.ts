@@ -116,6 +116,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["W", "watch together"],
   ["0–9", "jump to 0–90% of the file"],
   ["R", "reset the view"],
+  ["P", "tiny planet — or zoom all the way out"],
   ["F", "fullscreen"],
   ["O", "open another file"],
   ["?", "this list"],
@@ -123,7 +124,7 @@ const SHORTCUTS: Array<[string, string]> = [
 
 const GESTURES: Array<[string, string]> = [
   ["drag", "look around"],
-  ["pinch", "zoom in and out"],
+  ["pinch", "zoom — keep pinching out for a tiny planet"],
   ["double-tap", "reset the view"],
   ["tap ⛶", "fullscreen"],
   ["tap the bar", "jump to a point"],

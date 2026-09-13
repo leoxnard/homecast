@@ -66,3 +66,22 @@ rotates the geometry −90° about Y to bring it to −Z, which is where yaw 0 l
 Any change to the sphere, the camera, or the yaw/pitch maths should re-run this.
 A regression shows up as a best match against the wrong reference, not as a
 larger diff against the right one.
+
+
+## Re-run after the projection shader (tiny planet)
+
+The inverted sphere mesh was replaced by a fragment shader that maps each pixel
+to a direction, so the convention was re-verified with the same method rather
+than assumed to carry over:
+
+| capture | matches | diff |
+|---|---|---|
+| yaw 0 | v360 yaw 0 | 1.0 |
+| yaw 90 | v360 yaw −90 | 0.8 |
+| yaw 180 | v360 yaw 180 | 0.9 |
+| pitch +30 | v360 pitch +30 | 1.0 |
+
+Identical to the mesh renderer. At a 300° tiny planet the best match is v360's
+`sg` (stereographic) output at pitch −90, with a looser 44 because v360 defines
+the stereographic field of view differently — the images show the same
+structure at a different scale and slight rotation.

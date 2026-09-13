@@ -19,13 +19,18 @@ export interface ControlCallbacks {
   onShowLibrary?: () => void;
   onShowChapters?: () => void;
   onShowRoom?: () => void;
+  onTogglePlanet?: () => void;
 }
 
 /** Held to push past the computed FOV clamps (§4.3). */
 const isUnlockModifier = (e: { altKey: boolean }) => e.altKey;
 
 const PAN_STEP_DEG = 4;
-const ZOOM_STEP_DEG = 4;
+/**
+ * Zoom is multiplicative: the range now runs from a few degrees to a 300° tiny
+ * planet, and a fixed step would crawl at one end and jump at the other.
+ */
+const ZOOM_KEY_FACTOR = 1.06;
 
 export class Controls {
   private dragging = false;
@@ -88,7 +93,7 @@ export class Controls {
         const distance = this.touchDistance();
         if (this.pinchStartDistance > 0 && distance > 0) {
           // Spreading fingers narrows the field of view, i.e. zooms in.
-          this.viewer.setFov(this.pinchStartFov * (this.pinchStartDistance / distance), false);
+          this.viewer.zoomTo(this.pinchStartFov * (this.pinchStartDistance / distance), false);
           this.changed();
         }
         return;
@@ -100,7 +105,8 @@ export class Controls {
       this.lastY = e.clientY;
 
       // Degrees per CSS pixel at the current zoom.
-      const perPixel = this.viewer.fov / (el.clientHeight || 1);
+      // Capped so a tiny planet turns at a sane speed instead of spinning away.
+      const perPixel = Math.min(this.viewer.fov, 110) / (el.clientHeight || 1);
       this.viewer.look(this.viewer.yaw + dx * perPixel, this.viewer.pitch + dy * perPixel);
       this.changed();
     };
@@ -122,8 +128,8 @@ export class Controls {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       // Trackpads report small deltas continuously; mice report ~100 per notch.
-      const step = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY) * 0.05, 6);
-      this.viewer.setFov(this.viewer.fov + step, isUnlockModifier(e));
+      const step = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY) * 0.0016, 0.1);
+      this.viewer.zoomTo(this.viewer.fov * Math.exp(step), isUnlockModifier(e));
       this.changed();
     };
 
@@ -144,10 +150,10 @@ export class Controls {
 
         case "PageUp":
         case "+":
-        case "=": this.viewer.setFov(this.viewer.fov - ZOOM_STEP_DEG, unlocked); break;
+        case "=": this.viewer.zoomTo(this.viewer.fov / ZOOM_KEY_FACTOR, unlocked); break;
         case "PageDown":
         case "-":
-        case "_": this.viewer.setFov(this.viewer.fov + ZOOM_STEP_DEG, unlocked); break;
+        case "_": this.viewer.zoomTo(this.viewer.fov * ZOOM_KEY_FACTOR, unlocked); break;
 
         case " ": this.cb.onTogglePlay?.(); break;
         case "j": this.cb.onSeek?.(-10); break;
@@ -165,6 +171,7 @@ export class Controls {
         case "o": this.cb.onOpenFile?.(); break;
         case "?": this.cb.onToggleHelp?.(); break;
         case "r": this.viewer.look(0, 0); this.viewer.setFov(100); break;
+        case "p": this.cb.onTogglePlanet?.(); break;
         case "Home": this.cb.onSeekTo?.(0); break;
         case "End": this.cb.onSeekTo?.(0.999); break;
         default:

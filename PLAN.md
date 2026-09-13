@@ -231,7 +231,7 @@ infrastructure constraint in §2 is *eliminated*, not worked around.
 | Area | Decision |
 |---|---|
 | **Renderer** | three.js, inverted sphere, `VideoTexture`. Pan by drag + arrow keys. Fullscreen. |
-| **Zoom** | FOV-based. Limits **computed** from file resolution × window size: ~110° max out, ~3× upscale max in (raised from 2× after use). A **"1:1 native" badge** lights at exact pixel mapping. A modifier key **overrides past the clamps**. |
+| **Zoom** | FOV-based. Limits **computed** from file resolution × window size: ~3× upscale max in (raised from 2× after use); out past 110° the projection morphs to stereographic, ending in a tiny planet at 250–300°. A **"1:1 native" badge** lights at exact pixel mapping. A modifier key **overrides past the clamps**. |
 | **Chapters** | Authored **in-player**: a keypress drops a marker at the current frame, prompts for a name, and **captures the current view direction (yaw/pitch/fov)**. Export writes both the JSON sidecar and an ffmpeg metadata file. |
 | **Library** | Grid of videos with locally-generated thumbnails, duration, chapter count, resume position. `FileSystemFileHandle`s persisted in **IndexedDB** so one click reopens a file without re-picking. Local only. |
 | **View sync** | **Locked by default**, with an **unlink toggle**. A presence marker shows where the other viewer is looking. |

@@ -6,7 +6,7 @@
  * because ANGLE zero-copy binds the hardware-decoded frame via IOSurface.
  */
 import "./style.css";
-import { Viewer, DEFAULT_FOV } from "./viewer.ts";
+import { Viewer, DEFAULT_FOV, PLANET_FOV } from "./viewer.ts";
 import { Controls } from "./controls.ts";
 import { Hud } from "./hud.ts";
 import { probeCapability } from "./capability.ts";
@@ -396,6 +396,7 @@ new Controls(viewer, canvas, {
   onShowLibrary: () => (library.root.classList.contains("hidden") ? void showLibrary() : library.setVisible(false)),
   onShowChapters: () => (currentPanel === chapterEditor.root ? closePanel() : showChapters()),
   onShowRoom: () => (currentPanel === roomPanel.root ? closePanel() : showRoom()),
+  onTogglePlanet: togglePlanet,
 });
 
 // --- video events -----------------------------------------------------------
@@ -483,10 +484,39 @@ window.addEventListener("drop", (e) => {
 
 window.addEventListener("resize", () => viewer.resize());
 
+/**
+ * P: glide into a tiny planet, or back out to where you were. Animated because
+ * a jump from a 100° view to a 300° planet is disorienting.
+ */
+let planetTween = 0;
+let planetReturn: { yaw: number; pitch: number; fov: number } | undefined;
+function togglePlanet(): void {
+  cancelAnimationFrame(planetTween);
+  const from = viewer.state;
+  const entering = from.fov < 200;
+  if (entering) planetReturn = from;
+  const to = entering
+    ? { yaw: from.yaw, pitch: -89.9, fov: PLANET_FOV }
+    : (planetReturn ?? { yaw: from.yaw, pitch: 0, fov: DEFAULT_FOV });
+  const started = performance.now();
+  const step = (now: number) => {
+    const t = Math.min(1, (now - started) / 900);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    viewer.look(from.yaw + (to.yaw - from.yaw) * e, from.pitch + (to.pitch - from.pitch) * e);
+    viewer.setFov(from.fov + (to.fov - from.fov) * e, true);
+    sync.noteLocalMove();
+    if (t < 1) planetTween = requestAnimationFrame(step);
+  };
+  planetTween = requestAnimationFrame(step);
+}
+
 function frame(): void {
   viewer.resize();
   viewer.render();
-  presence.updateArrow(viewer.camera, canvas);
+  // Markers are placed through the perspective camera, which no longer matches
+  // the picture once the projection bends — hide rather than mislead.
+  if (viewer.isRectilinear) presence.updateArrow(viewer.camera, canvas);
+  else presence.hideArrow();
 
   const quality = video.getVideoPlaybackQuality?.();
   hud.update({
@@ -500,7 +530,7 @@ function frame(): void {
     magnification: viewer.magnification(),
     native: viewer.isNative(),
     // §5.1: the visible arc is what actually matters, not the frame width.
-    visiblePixels: video.videoWidth
+    visiblePixels: video.videoWidth && viewer.isRectilinear
       ? (video.videoWidth / 360) * viewer.fov * viewer.camera.aspect
       : undefined,
     resolution: video.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : undefined,

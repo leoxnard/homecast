@@ -110,6 +110,13 @@ The readout also shows how many pixels the visible arc actually gets, which is
 the honest number: an 8K equirect frame spreads 7680–8192 px over a full 360°,
 so a 90° view is only ~1900–2000 px wide (§5.1).
 
+### Tiny planet
+
+Keep zooming out. Past about 110° the picture bends from an ordinary view into a
+stereographic one and tilts toward the ground, until the venue becomes a little
+world with the sky wrapped around it. Zooming back in returns to where you were
+looking. **P** glides there and back; on a phone, keep pinching out.
+
 ### Keyboard
 
 | | |
@@ -120,6 +127,7 @@ so a 90° view is only ~1900–2000 px wide (§5.1).
 | `J` / `L` | ∓10 s · `,` / `.` step a frame |
 | `[` / `]` | previous / next chapter |
 | `0`–`9` | jump to 0–90% |
+| `P` | tiny planet and back |
 | `R` · `F` · `O` · `?` | reset view · fullscreen · open · help |
 
 ## Verified on the real footage

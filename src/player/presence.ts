@@ -146,6 +146,10 @@ export class Presence {
       `${rect.height / 2 - Math.sin(angle) * radius}px) rotate(${-angle}rad)`;
   }
 
+  hideArrow(): void {
+    this.arrow.hidden = true;
+  }
+
   clear(): void {
     this.update([]);
     this.arrow.hidden = true;
