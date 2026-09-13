@@ -77,6 +77,14 @@ export class Hud {
   private readonly statsEl: HTMLElement;
   private scrubbing = false;
   private lastChapterSignature = "";
+  /** Latest chapters and duration, kept so hovering can describe any point. */
+  private chapters: Chapter[] = [];
+  private duration = 0;
+  private readonly hoverTip: HTMLElement;
+  private readonly hoverTitle: HTMLElement;
+  private readonly hoverTime: HTMLElement;
+  private readonly hoverSpan: HTMLElement;
+  private hovering = false;
 
   constructor(cb: HudCallbacks) {
     this.cb = cb;
@@ -121,7 +129,15 @@ export class Hud {
     this.track = el("div", "track");
     this.played = el("div", "played");
     this.chapterBar = el("div", "chapter-bar");
-    this.track.append(this.played, this.chapterBar);
+    // Hover preview: which chapter is under the pointer, and where it spans.
+    this.hoverSpan = el("div", "hover-span");
+    this.hoverSpan.hidden = true;
+    this.hoverTip = el("div", "hover-tip");
+    this.hoverTip.hidden = true;
+    this.hoverTitle = el("div", "hover-title");
+    this.hoverTime = el("div", "hover-time");
+    this.hoverTip.append(this.hoverTitle, this.hoverTime);
+    this.track.append(this.hoverSpan, this.played, this.chapterBar, this.hoverTip);
     this.bindScrub();
 
     this.timeEl = el("div", "time", "0:00 / 0:00");
@@ -138,18 +154,94 @@ export class Hud {
     };
     this.track.addEventListener("pointerdown", (e) => {
       this.scrubbing = true;
-      this.track.setPointerCapture(e.pointerId);
+      try {
+        this.track.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture is an optimisation */
+      }
       this.cb.onSeekTo(fractionAt(e.clientX));
+      this.showHover(e);
     });
     this.track.addEventListener("pointermove", (e) => {
       if (this.scrubbing) this.cb.onSeekTo(fractionAt(e.clientX));
+      this.showHover(e);
+    });
+    this.track.addEventListener("pointerenter", (e) => {
+      this.hovering = true;
+      this.showHover(e);
+    });
+    this.track.addEventListener("pointerleave", () => {
+      this.hovering = false;
+      if (!this.scrubbing) this.hideHover();
     });
     const end = (e: PointerEvent) => {
       this.scrubbing = false;
-      this.track.releasePointerCapture?.(e.pointerId);
+      try {
+        this.track.releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      // A finger has no hover state to fall back to, so the preview goes with it.
+      if (e.pointerType === "touch" || !this.hovering) this.hideHover();
     };
     this.track.addEventListener("pointerup", end);
     this.track.addEventListener("pointercancel", end);
+  }
+
+  /**
+   * Describe the point under the pointer: the chapter it falls in, that
+   * chapter's span on the bar, and the exact time. Over a tick, snap to the
+   * chapter start, since clicking a tick jumps there.
+   */
+  private showHover(e: PointerEvent): void {
+    if (!this.duration) return this.hideHover();
+    const rect = this.track.getBoundingClientRect();
+    if (!rect.width) return;
+
+    const target = e.target as HTMLElement | null;
+    const tickIndex = target?.classList.contains("chapter-tick") ? Number(target.dataset.index) : -1;
+    const onTick = tickIndex >= 0 && this.chapters[tickIndex] !== undefined;
+
+    const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const time = onTick ? (this.chapters[tickIndex]?.start ?? 0) : fraction * this.duration;
+
+    let index = -1;
+    for (let i = 0; i < this.chapters.length; i++) {
+      if ((this.chapters[i]?.start ?? Infinity) <= time + 0.001) index = i;
+      else break;
+    }
+    const chapter = this.chapters[index];
+
+    if (chapter) {
+      this.hoverTitle.textContent = chapter.title;
+      this.hoverTitle.hidden = false;
+      this.hoverTime.textContent =
+        `${formatTime(time)}  ·  ${index + 1}/${this.chapters.length}` +
+        (onTick ? "" : `  ·  starts ${formatTime(chapter.start)}`);
+      const end = this.chapters[index + 1]?.start ?? this.duration;
+      this.hoverSpan.style.left = `${(chapter.start / this.duration) * 100}%`;
+      this.hoverSpan.style.width = `${((end - chapter.start) / this.duration) * 100}%`;
+      this.hoverSpan.hidden = false;
+    } else {
+      // Before the first chapter, or no chapters at all: the time is still useful.
+      this.hoverTitle.hidden = true;
+      this.hoverTime.textContent = formatTime(time);
+      this.hoverSpan.hidden = true;
+    }
+
+    this.hoverTip.hidden = false;
+    // Keep the tip on screen at either end of the bar.
+    const x = (onTick ? (time / this.duration) * rect.width : e.clientX - rect.left);
+    const half = this.hoverTip.offsetWidth / 2;
+    const viewportLeft = -rect.left + 8;
+    const viewportRight = window.innerWidth - rect.left - 8;
+    const clamped = Math.min(Math.max(x, viewportLeft + half), viewportRight - half);
+    this.hoverTip.style.left = `${clamped}px`;
+  }
+
+  private hideHover(): void {
+    this.hoverTip.hidden = true;
+    this.hoverSpan.hidden = true;
   }
 
   update(s: HudState): void {
@@ -175,6 +267,8 @@ export class Hud {
   }
 
   private renderChapters(s: HudState): void {
+    this.chapters = s.chapters;
+    this.duration = Number.isFinite(s.duration) ? s.duration : 0;
     const signature = `${s.duration}|${s.chapters.map((c) => `${c.start}:${c.title}`).join("|")}`;
     if (signature !== this.lastChapterSignature) {
       this.lastChapterSignature = signature;
@@ -183,7 +277,10 @@ export class Hud {
         s.chapters.forEach((c, i) => {
           const tick = el("button", "chapter-tick");
           tick.style.left = `${(c.start / s.duration) * 100}%`;
-          tick.title = `${formatTime(c.start)} — ${c.title}`;
+          // No native `title`: the hover preview shows this immediately, and a
+          // delayed OS tooltip on top of it would just duplicate it.
+          tick.setAttribute("aria-label", `${formatTime(c.start)} — ${c.title}`);
+          tick.dataset.index = String(i);
           tick.addEventListener("pointerdown", (e) => e.stopPropagation());
           tick.addEventListener("click", (e) => {
             e.stopPropagation();

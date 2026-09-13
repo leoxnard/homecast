@@ -641,3 +641,40 @@ body.has-takeover .hud { opacity: 0; pointer-events: none; }
 .btn.primary-small { background: var(--accent); border-color: var(--accent); color: #04203f; font-weight: 600; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .panel .actions { flex-wrap: wrap; }
+
+/* --- timeline hover preview ----------------------------------------------- */
+.hover-span {
+  position: absolute;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+.hover-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  max-width: min(360px, 80vw);
+  padding: 7px 10px;
+  background: rgba(16, 16, 18, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 5;
+}
+.hover-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hover-time {
+  margin-top: 2px;
+  font-family: var(--hud-font);
+  font-size: 11px;
+  color: var(--dim);
+}
+.hover-title[hidden] + .hover-time { margin-top: 0; color: var(--fg); }
