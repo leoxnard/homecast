@@ -299,10 +299,19 @@ async function download(req: IncomingMessage, res: ServerResponse, shareId: stri
   if (!token.ok) return json(res, token.status === 404 ? 404 : UPSTREAM, { error: "share not found or expired" });
   const cookie = cookiesFrom(token).join("; ");
 
-  const upstream = await fetch(`${await base()}/api/shares/${shareId}/files/${fileId}?download=true`, { headers: { cookie } });
+  // The size comes from the share, not the download's Content-Length: behind
+  // Cloudflare the download is streamed chunked with no length at all.
+  const info = await fetch(`${await base()}/api/shares/${shareId}`, { headers: { cookie } });
+  const files = info.ok ? (((await info.json()) as { files?: Array<{ id: string; size: string | number }> }).files ?? []) : [];
+  const listed = Number(files.find((f) => f.id === fileId)?.size ?? NaN);
+
+  // identity: otherwise Node asks for gzip/br and a proxy compresses the video on the fly.
+  const upstream = await fetch(`${await base()}/api/shares/${shareId}/files/${fileId}?download=true`, {
+    headers: { cookie, "accept-encoding": "identity" },
+  });
   if (!upstream.ok || !upstream.body) return json(res, upstream.status === 404 ? 404 : UPSTREAM, { error: "file unavailable" });
 
-  const size = Number(upstream.headers.get("content-length") ?? NaN);
+  const size = Number.isFinite(listed) && listed > 0 ? listed : Number(upstream.headers.get("content-length") ?? NaN);
   const range = /^bytes=(\d+)-$/.exec(String(req.headers.range ?? ""));
   const start = range ? Number(range[1]) : 0;
   if (!Number.isFinite(size) || start > size) {
