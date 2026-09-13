@@ -230,3 +230,12 @@ Three mobile-specific things the desktop build had simply never needed:
 - **`pointer: coarse`.** Tap targets were sized for a mouse; they now have a
   40 px minimum, and the library's hover-only remove button is always visible
   since there is no hover.
+
+**Second pass.** Fixing the overlap was not enough — the first thing a visitor
+saw was still a floating card of diagnostics whose edge cut through the toolbar
+behind it. On a phone the welcome screen is now a full-height sheet with the
+player chrome hidden behind it (there is nothing to transport-control before a
+file is open), one primary action, the verdict as a single line with a coloured
+dot, and every technical row folded into a `<details>` disclosure. The lesson is
+that "make it responsive" and "make it presentable" are different jobs; the
+first is measurable, the second needs someone to look at it.

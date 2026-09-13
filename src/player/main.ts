@@ -59,11 +59,15 @@ function showPanel(node: HTMLElement): void {
   currentPanel?.remove();
   currentPanel = node;
   document.body.append(node);
+  // A full-height sheet hides the player chrome behind it rather than letting
+  // the toolbar show through its edge.
+  document.body.classList.toggle("has-takeover", node.classList.contains("takeover"));
 }
 
 function closePanel(): void {
   currentPanel?.remove();
   currentPanel = undefined;
+  document.body.classList.remove("has-takeover");
 }
 
 function showHelp(): void {

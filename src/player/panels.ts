@@ -20,27 +20,63 @@ export interface StartPanelCallbacks {
  */
 export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElement {
   const root = panel();
+  root.classList.add("takeover", "start-panel");
 
+  const brand = document.createElement("div");
+  brand.className = "start-brand";
   const h1 = document.createElement("h1");
   h1.textContent = "homecast";
   const sub = document.createElement("p");
-  sub.textContent = "Local-first 360° video. Your file never leaves this machine.";
+  sub.className = "start-sub";
+  sub.textContent = "360° video that stays on your own machine.";
+  brand.append(h1, sub);
 
-  const verdict = document.createElement("p");
-  verdict.className = `verdict ${cap.verdict.level}`;
-  verdict.textContent = cap.verdict.headline;
+  // The verdict is one line with a coloured dot — the reasoning lives in the
+  // disclosure below, so arriving here is not a wall of diagnostics.
+  const verdict = document.createElement("div");
+  verdict.className = `start-verdict ${cap.verdict.level}`;
+  const dot = document.createElement("span");
+  dot.className = "verdict-dot";
+  const verdictText = document.createElement("span");
+  verdictText.textContent = cap.verdict.headline;
+  verdict.append(dot, verdictText);
 
-  const detail = document.createElement("ul");
+  // --- primary action ------------------------------------------------------
+  const actions = document.createElement("div");
+  actions.className = "start-actions";
+
+  const open = document.createElement("button");
+  open.className = "btn primary";
+  open.textContent = "Open a video";
+  open.addEventListener("click", () => cb.onOpenFile());
+
+  const secondary = document.createElement("div");
+  secondary.className = "start-secondary";
+  const help = document.createElement("button");
+  help.className = "btn ghost";
+  help.textContent = cap.touch ? "How to use it" : "Keyboard shortcuts";
+  help.addEventListener("click", () => cb.onShowHelp());
+  secondary.append(help);
+
+  actions.append(open, secondary);
+  if (cap.verdict.level === "blocked") open.disabled = true;
+
+  // --- everything technical, folded away -----------------------------------
+  const details = document.createElement("details");
+  details.className = "start-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "What this device can do";
+  details.append(summary);
+
   for (const line of cap.verdict.detail) {
-    const li = document.createElement("li");
-    li.textContent = line;
-    detail.append(li);
+    const p = document.createElement("p");
+    p.className = "detail-line";
+    p.textContent = line;
+    details.append(p);
   }
 
-  const h2 = document.createElement("h2");
-  h2.textContent = "This device";
-  const specs = document.createElement("div");
-  specs.className = "keys";
+  const specs = document.createElement("dl");
+  specs.className = "specs";
   const rows: Array<[string, string]> = [
     ["GPU", cap.renderer],
     ["Max texture", `${cap.maxTextureSize} px${cap.maxTextureSize >= 8192 ? " — 8K equirect fits" : " — too small for 8K"}`],
@@ -49,27 +85,19 @@ export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElemen
     ["Pixel ratio", `${cap.devicePixelRatio}×`],
   ];
   for (const [k, v] of rows) {
-    const kbd = document.createElement("kbd");
-    kbd.textContent = k;
-    const val = document.createElement("div");
-    val.textContent = v;
-    specs.append(kbd, val);
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = v;
+    specs.append(dt, dd);
   }
+  details.append(specs);
 
-  const actions = document.createElement("div");
-  actions.className = "actions";
-  const open = document.createElement("button");
-  open.className = "btn";
-  open.textContent = "Open a video…";
-  open.addEventListener("click", () => cb.onOpenFile());
-  const help = document.createElement("button");
-  help.className = "btn";
-  help.textContent = cap.touch ? "How to use it" : "Keyboard shortcuts";
-  help.addEventListener("click", () => cb.onShowHelp());
-  actions.append(open, help);
+  const privacy = document.createElement("p");
+  privacy.className = "start-privacy";
+  privacy.textContent = "Nothing is uploaded. The file is read straight from your device.";
 
-  root.append(h1, sub, verdict, detail, h2, specs, actions);
-  if (cap.verdict.level === "blocked") open.disabled = true;
+  root.append(brand, verdict, actions, details, privacy);
   return root;
 }
 
