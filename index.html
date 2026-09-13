@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>homecast</title>
     <link rel="icon" href="data:," />
+    <script>
+      // If the app bundle fails to load — typically a page kept from before a
+      // redeploy, pointing at an asset that no longer exists — reload once to
+      // pick up the current build instead of leaving a blank screen.
+      addEventListener("error", function (e) {
+        var t = e.target;
+        if (!t || t.tagName !== "SCRIPT") return;
+        try {
+          if (sessionStorage.getItem("homecast-reloaded")) return;
+          sessionStorage.setItem("homecast-reloaded", "1");
+        } catch (_) { return; }
+        location.reload();
+      }, true);
+    </script>
   </head>
   <body>
     <div id="stage">

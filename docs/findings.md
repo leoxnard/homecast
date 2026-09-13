@@ -239,3 +239,30 @@ file is open), one primary action, the verdict as a single line with a coloured
 dot, and every technical row folded into a `<details>` disclosure. The lesson is
 that "make it responsive" and "make it presentable" are different jobs; the
 first is measurable, the second needs someone to look at it.
+
+---
+
+## F13. The SPA fallback answered missing *assets* with the HTML shell
+
+To make room URLs like `/w/7QK2M` load the player, the server returned
+`index.html` for every unknown path — including `/assets/index-<hash>.js`. After
+a redeploy, a browser still holding the previous page (Safari restores tabs and
+keeps a back-forward cache aggressively) requested the previous build's hashed
+bundle, got **`200 text/html`**, refused to execute it under `nosniff`, and showed
+a blank page. Chrome had fetched the fresh page, so it worked — which made it look
+like a Safari bug.
+
+Cloudflare's edge cache hid it: an old asset it had already cached came back as
+real JavaScript (`cf-cache-status: HIT`), while the container itself answered the
+same URL with HTML. Anything the local edge node had not cached went blank.
+
+Two fixes:
+
+- **Only extension-less paths fall back to the shell.** A missing file is a real
+  `404`, so it can never be mistaken for a script.
+- **A page whose bundle fails to load reloads itself once**, picking up the
+  current build. The guard is cleared by the app after it boots — not on `load`,
+  which also fires when the script failed and would let a broken deploy loop.
+
+Verified in Safari against a server that serves a stale page first: request log
+shows the stale page, its 404ing bundle, one reload, the current bundle, render.

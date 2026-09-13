@@ -64,8 +64,13 @@ function serve(req: IncomingMessage, res: ServerResponse): void {
 
   const file = resolveFile(url);
 
-  // Unknown paths fall back to the app shell, so room URLs like /w/7QK2M
-  // (PLAN §4.3) load the player instead of 404ing.
+  // Unknown *pages* fall back to the app shell, so room URLs like /w/7QK2M
+  // (PLAN §4.3) load the player instead of 404ing. Unknown *files* must not:
+  // answering a stale `/assets/index-OLD.js` with the HTML shell and a 200
+  // makes the browser refuse the "script" and render a blank page — which is
+  // what a tab still holding the previous deploy's HTML hit after a redeploy.
+  const pathname = (url.split("?")[0] ?? "/");
+  if (!file && extname(pathname) !== "") return send(res, 404, "not found");
   const target = file ?? join(ROOT, "index.html");
   if (!existsSync(target)) return send(res, 500, "build missing: run `npm run build`");
 

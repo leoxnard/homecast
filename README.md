@@ -90,7 +90,7 @@ the file you should open if the master will not work here — a GPU whose
 ### Zoom
 
 Limits are computed from the file's resolution and your window size, not
-hardcoded: out to 110°, in to 2× upscale. The **1:1 NATIVE** badge lights when
+hardcoded: out to 110°, in to 3× upscale. The **1:1 NATIVE** badge lights when
 one source pixel lands on exactly one screen pixel. Hold **⌥** to override the
 clamps.
 

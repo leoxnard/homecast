@@ -148,10 +148,10 @@ export function helpPanel(onClose: () => void, touch = false): HTMLElement {
   const note = document.createElement("p");
   note.textContent = touch
     ? "Zoom stops are computed from the file's resolution and your screen size: out at 110°, " +
-      "in at 2× upscale. The 1:1 NATIVE badge lights when one source pixel lands on exactly " +
+      "in at 3× upscale. The 1:1 NATIVE badge lights when one source pixel lands on exactly " +
       "one screen pixel."
     : "Zoom stops are computed from the file's resolution and this window's size: " +
-      "out at 110°, in at 2× upscale. Hold ⌥ to override them. The 1:1 NATIVE badge " +
+      "out at 110°, in at 3× upscale. Hold ⌥ to override them. The 1:1 NATIVE badge " +
       "lights when one source pixel lands on exactly one screen pixel.";
 
   const actions = document.createElement("div");

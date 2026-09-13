@@ -19,7 +19,7 @@ export interface ViewState {
 export interface FovLimits {
   /** widest allowed view — the plan's ~110° zoom-out stop */
   max: number;
-  /** narrowest allowed view: the FOV at which we upscale the source 2× */
+  /** narrowest allowed view: the FOV at which we upscale the source MAX_UPSCALE× */
   min: number;
   /** FOV at exact 1:1 pixel mapping; the "native" badge lights here */
   native: number;
@@ -27,6 +27,12 @@ export interface FovLimits {
 
 /** Absolute stops the modifier key unlocks past the computed clamps (§4.3). */
 const HARD_MIN_FOV = 5;
+/**
+ * How far past 1:1 the normal zoom goes. The plan started at 2×, which proved
+ * too tight for reading detail on stage; 3× is still soft rather than blocky
+ * with linear filtering. ⌥ goes further.
+ */
+export const MAX_UPSCALE = 3;
 const HARD_MAX_FOV = 140;
 
 export const DEFAULT_FOV = 100;
@@ -109,7 +115,7 @@ export class Viewer {
     const native = this.renderer.domElement.height / src;
     return {
       max: Math.min(110, HARD_MAX_FOV),
-      min: Math.max(HARD_MIN_FOV, native / 2),
+      min: Math.max(HARD_MIN_FOV, native / MAX_UPSCALE),
       native,
     };
   }

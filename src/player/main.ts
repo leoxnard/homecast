@@ -514,6 +514,15 @@ requestAnimationFrame(frame);
 
 // --- start ------------------------------------------------------------------
 
+// The bundle ran, so the reload-once guard in index.html can re-arm. Clearing
+// it here rather than on `load` matters: `load` also fires when the script
+// failed, which would let a persistently broken deploy reload forever.
+try {
+  sessionStorage.removeItem("homecast-reloaded");
+} catch {
+  /* storage blocked; the guard simply stays spent for this tab */
+}
+
 // A room code in the URL is the whole invitation (§4.3: no accounts).
 const roomFromUrl = location.pathname.startsWith(ROOM_PATH)
   ? location.pathname.slice(ROOM_PATH.length).toUpperCase()
