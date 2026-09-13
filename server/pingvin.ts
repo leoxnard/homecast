@@ -135,14 +135,29 @@ async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   return Buffer.concat(parts);
 }
 
-let limits: { maxSize: number; chunkSize: number } | undefined;
-async function pingvinLimits(): Promise<{ maxSize: number; chunkSize: number }> {
+interface Limits {
+  maxSize: number;
+  chunkSize: number;
+  /** Pingvin's "share.maxExpiration", e.g. "1 months"; "0 days" (or absent) means no limit */
+  maxExpiration?: string;
+  /** Pingvin's public address ("general.appUrl"), for links people open in a browser */
+  appUrl?: string;
+}
+
+let limits: Limits | undefined;
+async function pingvinLimits(): Promise<Limits> {
   if (limits) return limits;
   const res = await fetch(`${await base()}/api/configs`);
   if (!res.ok) throw new RelayError(UPSTREAM, `could not read Pingvin config (${res.status})`);
   const configs = (await res.json()) as Array<{ key: string; value: string }>;
   const get = (k: string) => Number(configs.find((c) => c.key === k)?.value ?? NaN);
-  limits = { maxSize: get("share.maxSize"), chunkSize: get("share.chunkSize") };
+  const text = (k: string) => configs.find((c) => c.key === k)?.value;
+  limits = {
+    maxSize: get("share.maxSize"),
+    chunkSize: get("share.chunkSize"),
+    maxExpiration: text("share.maxExpiration"),
+    appUrl: text("general.appUrl")?.replace(/\/+$/, ""),
+  };
   return limits;
 }
 
@@ -158,8 +173,8 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
     // GET status — safe to expose: says whether uploads exist, never how.
     if (req.method === "GET" && parts[0] === "status") {
       if (!pingvinEnabled()) return json(res, 200, { enabled: false }), true;
-      const { maxSize, chunkSize } = await pingvinLimits();
-      return json(res, 200, { enabled: true, maxSize, chunkSize }), true;
+      const { maxSize, chunkSize, maxExpiration } = await pingvinLimits();
+      return json(res, 200, { enabled: true, maxSize, chunkSize, maxExpiration }), true;
     }
 
     if (!pingvinEnabled()) return json(res, 404, { error: "Pingvin uploads are not configured" }), true;
@@ -175,7 +190,16 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
 
     // POST shares {name, size} → {shareId, chunkSize}
     if (req.method === "POST" && parts[0] === "shares" && parts.length === 1) {
-      const body = JSON.parse((await readBody(req, 4096)).toString("utf8")) as { name?: unknown; size?: unknown };
+      const body = JSON.parse((await readBody(req, 4096)).toString("utf8")) as {
+        name?: unknown;
+        size?: unknown;
+        expiration?: unknown;
+      };
+      // Pingvin's relative format; Pingvin itself rejects anything above its maximum.
+      const expiration =
+        typeof body.expiration === "string" && /^(never|\d{1,3}-(hour|day|week|month|year)s?)$/.test(body.expiration)
+          ? body.expiration
+          : EXPIRATION;
       const size = Number(body.size);
       const name = String(body.name ?? "video").slice(0, 200);
       const { maxSize, chunkSize } = await pingvinLimits();
@@ -194,7 +218,7 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
         body: JSON.stringify({
           id: shareId,
           name: title,
-          expiration: EXPIRATION,
+          expiration,
           recipients: [],
           security: {},
           description: "Shared from homecast",
@@ -244,7 +268,14 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
     if (req.method === "POST" && parts[0] === "shares" && parts[2] === "complete" && ID_PATTERN.test(parts[1] ?? "")) {
       const done = await authed(`/api/shares/${parts[1]}/complete`, { method: "POST" });
       if (!done.ok) return json(res, UPSTREAM, { error: `Pingvin could not complete the share: ${await done.text()}` }), true;
-      return json(res, 200, { ok: true }), true;
+      const { appUrl } = await pingvinLimits();
+      const resolved = await base();
+      let pageBase = appUrl || resolved;
+      // An appUrl left at http:// while Pingvin redirects to https: link the https one.
+      if (pageBase.startsWith("http://") && resolved.startsWith("https://") && new URL(pageBase).host === new URL(resolved).host) {
+        pageBase = `https://${pageBase.slice("http://".length)}`;
+      }
+      return json(res, 200, { ok: true, pageUrl: `${pageBase}/s/${parts[1]}` }), true;
     }
 
     return json(res, 404, { error: "unknown Pingvin route" }), true;

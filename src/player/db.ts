@@ -6,6 +6,7 @@
  * without re-picking it — and without the file ever being copied or uploaded.
  */
 import type { Chapter } from "../shared/chapters.ts";
+import type { SharedLink } from "./share/share-panel.ts";
 
 const DB_NAME = "homecast";
 const DB_VERSION = 1;
@@ -34,6 +35,8 @@ export interface LibraryEntry {
   shareUrl?: string;
   /** relay download path once uploaded to Pingvin through homecast */
   relayPath?: string;
+  /** links made from "Share video", newest first */
+  shares?: SharedLink[];
   addedAt: number;
   lastOpenedAt: number;
 }

@@ -14,6 +14,7 @@ export interface HudCallbacks {
   onShowLibrary: () => void;
   onShowChapters: () => void;
   onShowRoom: () => void;
+  onShowShare: () => void;
 }
 
 export interface HudState {
@@ -103,6 +104,9 @@ export class Hud {
     this.roomBtn = el("button", "btn");
     this.roomBtn.append(label("Watch together", "Room"));
     this.roomBtn.addEventListener("click", () => this.cb.onShowRoom());
+    const shareBtn = el("button", "btn");
+    shareBtn.append(label("Share video", "Share"));
+    shareBtn.addEventListener("click", () => this.cb.onShowShare());
     const openBtn = el("button", "btn");
     openBtn.append(label("Open file", "Open"));
     openBtn.addEventListener("click", () => this.cb.onOpenFile());
@@ -110,7 +114,7 @@ export class Hud {
     fsBtn.append(label("Fullscreen", "⛶"));
     fsBtn.addEventListener("click", () => this.cb.onToggleFullscreen());
     const topRight = el("div", "hud-top-right");
-    topRight.append(this.roomBtn, libraryBtn, chaptersBtn, openBtn, fsBtn);
+    topRight.append(this.roomBtn, shareBtn, libraryBtn, chaptersBtn, openBtn, fsBtn);
     top.append(this.titleEl, this.chapterLabel, topRight);
 
     // --- view readout -------------------------------------------------------

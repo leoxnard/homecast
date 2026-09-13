@@ -25,6 +25,7 @@ export interface CardAction {
 export function formatEta(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
   const s = Math.round(seconds);
+  if (s < 1) return "";
   if (s < 60) return `${s}s left`;
   const m = Math.round(s / 60);
   if (m < 60) return `${m} min left`;

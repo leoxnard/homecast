@@ -97,10 +97,16 @@ export async function openBrowserStorageSink(name: string, resume: boolean): Pro
   return streamSink("browser-storage", handle, existing);
 }
 
-/** Safari before 26 has no `createWritable`; write through a worker's sync handle. */
-async function workerSink(name: string, handle: FileSystemFileHandle, resume: boolean): Promise<Sink> {
+interface StorageWorker {
+  offset: number;
+  write(data: ArrayBuffer, at?: number): Promise<void>;
+  close(): Promise<void>;
+}
+
+/** A worker holding a sync access handle on `dir/name` (see opfs-worker.ts). */
+async function storageWorker(dir: string, name: string, resume: boolean): Promise<StorageWorker> {
   const worker = new Worker(new URL("./opfs-worker.ts", import.meta.url), { type: "module" });
-  // One request at a time; the receiver already chains its writes.
+  // One request at a time; callers already chain their writes.
   let queue: Promise<unknown> = Promise.resolve();
   const call = <T>(message: unknown, transfer: Transferable[] = []): Promise<T> => {
     const next = queue.then(
@@ -117,29 +123,101 @@ async function workerSink(name: string, handle: FileSystemFileHandle, resume: bo
   };
   let offset: number;
   try {
-    ({ offset } = await call<{ offset: number }>({ op: "open", dir: OPFS_DIR, name: safeFileName(name), resume }));
+    ({ offset } = await call<{ offset: number }>({ op: "open", dir, name, resume }));
   } catch (err) {
     worker.terminate();
     throw err;
   }
+  let closed = false;
+  return {
+    offset,
+    write: (data, at) => call({ op: "write", data, at }, [data]),
+    async close() {
+      if (closed) return;
+      closed = true;
+      await call({ op: "close" }).catch(() => {});
+      worker.terminate();
+    },
+  };
+}
+
+/** Safari before 26 has no `createWritable`; write through a worker's sync handle. */
+async function workerSink(name: string, handle: FileSystemFileHandle, resume: boolean): Promise<Sink> {
+  const w = await storageWorker(OPFS_DIR, safeFileName(name), resume);
   let finished = false;
   return {
     kind: "browser-storage",
-    offset,
-    write: (chunk) => call({ op: "write", data: chunk }, [chunk]),
+    offset: w.offset,
+    write: (chunk) => w.write(chunk),
     async close() {
       finished = true;
-      await call({ op: "close" });
-      worker.terminate();
+      await w.close();
       return { file: await handle.getFile(), handle };
     },
     async abort() {
       if (finished) return;
       finished = true;
-      await call({ op: "close" }).catch(() => {});
-      worker.terminate();
+      await w.close();
     },
   };
+}
+
+// --- scratch files: temporary output that is written out of order -------------
+
+const SCRATCH_DIR = "homecast-scratch";
+
+export interface ScratchFile {
+  /** write at an absolute byte position (an MP4 writer patches its header last) */
+  writeAt(data: Uint8Array, position: number): Promise<void>;
+  close(): Promise<File>;
+  abort(): Promise<void>;
+}
+
+export async function openScratchFile(name: string): Promise<ScratchFile> {
+  const root = await navigator.storage.getDirectory();
+  const dir = await root.getDirectoryHandle(SCRATCH_DIR, { create: true });
+  const fileName = safeFileName(name);
+  const handle = await dir.getFileHandle(fileName, { create: true });
+  const hasWritable = typeof (handle as { createWritable?: unknown }).createWritable === "function";
+  if (hasWritable) {
+    const writable = await (handle as unknown as {
+      createWritable: () => Promise<FileSystemWritableFileStream>;
+    }).createWritable();
+    return {
+      writeAt: (data, position) => writable.write({ type: "write", position, data: data as Uint8Array<ArrayBuffer> }),
+      async close() {
+        await writable.close();
+        return handle.getFile();
+      },
+      async abort() {
+        await writable.abort().catch(() => {});
+        await dir.removeEntry(fileName).catch(() => {});
+      },
+    };
+  }
+  const w = await storageWorker(SCRATCH_DIR, fileName, false);
+  return {
+    // Copy: the buffer is transferred to the worker, and the caller may still hold it.
+    writeAt: (data, position) => w.write(data.slice().buffer, position),
+    async close() {
+      await w.close();
+      return handle.getFile();
+    },
+    async abort() {
+      await w.close();
+      await dir.removeEntry(fileName).catch(() => {});
+    },
+  };
+}
+
+export async function deleteScratchFile(name: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle(SCRATCH_DIR);
+    await dir.removeEntry(safeFileName(name));
+  } catch {
+    /* already gone */
+  }
 }
 
 /** A fully received copy already in browser storage, if any. */

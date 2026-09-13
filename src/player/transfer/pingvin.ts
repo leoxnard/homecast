@@ -11,6 +11,8 @@ export interface PingvinStatus {
   enabled: boolean;
   maxSize?: number;
   chunkSize?: number;
+  /** e.g. "1 months"; absent or zero means Pingvin allows "never" */
+  maxExpiration?: string;
 }
 
 export async function pingvinStatus(): Promise<PingvinStatus> {
@@ -41,6 +43,24 @@ export function storeUploadKey(key: string | undefined): void {
   }
 }
 
+/** Link lifetimes to offer, longest last, limited to what Pingvin allows. */
+export function expirationChoices(maxExpiration: string | undefined): Array<{ value: string; label: string }> {
+  const all = [
+    { value: "1-day", label: "1 day", days: 1 },
+    { value: "1-week", label: "1 week", days: 7 },
+    { value: "1-month", label: "1 month", days: 31 },
+    { value: "3-months", label: "3 months", days: 92 },
+    { value: "1-year", label: "1 year", days: 366 },
+    { value: "never", label: "Never expires", days: Infinity },
+  ];
+  const m = /^(\d+)\s*(minute|hour|day|week|month|year)s?$/.exec(maxExpiration?.trim() ?? "");
+  if (!m || Number(m[1]) === 0) return all.map(({ value, label }) => ({ value, label }));
+  const unitDays = { minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 31, year: 366 }[m[2] as "day"];
+  const max = Number(m[1]) * unitDays;
+  const allowed = all.filter((c) => c.days <= max);
+  return (allowed.length ? allowed : all.slice(0, 1)).map(({ value, label }) => ({ value, label }));
+}
+
 export class UploadError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -60,6 +80,8 @@ export interface UploadResult {
   fileId: string;
   /** same-origin relay path a friend downloads from */
   downloadPath: string;
+  /** Pingvin's own download page for the share */
+  pageUrl?: string;
 }
 
 async function call(path: string, key: string, init: RequestInit): Promise<Response> {
@@ -76,11 +98,12 @@ export async function uploadToPingvin(
   key: string,
   onProgress: (p: UploadProgress) => void,
   signal: AbortSignal,
+  options: { expiration?: string } = {},
 ): Promise<UploadResult> {
   const created = await call("/api/pingvin/shares", key, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: file.name, size: file.size }),
+    body: JSON.stringify({ name: file.name, size: file.size, expiration: options.expiration }),
     signal,
   });
   const createdBody = (await created.json().catch(() => ({}))) as { shareId?: string; chunkSize?: number; error?: string };
@@ -139,11 +162,14 @@ export async function uploadToPingvin(
 
   if (!fileId) throw new UploadError(0, "Pingvin never returned a file id");
   const done = await call(`/api/pingvin/shares/${shareId}/complete`, key, { method: "POST", signal });
-  if (!done.ok) {
-    const out = (await done.json().catch(() => ({}))) as { error?: string };
-    throw new UploadError(done.status, out.error ?? "could not complete the share");
-  }
-  return { shareId, fileId, downloadPath: `/api/pingvin/download/${shareId}/${fileId}` };
+  const out = (await done.json().catch(() => ({}))) as { error?: string; pageUrl?: string };
+  if (!done.ok) throw new UploadError(done.status, out.error ?? "could not complete the share");
+  return {
+    shareId,
+    fileId,
+    downloadPath: `/api/pingvin/download/${shareId}/${fileId}`,
+    pageUrl: out.pageUrl && /^https?:\/\//.test(out.pageUrl) ? out.pageUrl : undefined,
+  };
 }
 
 const WRITE_BATCH = 4 * 1024 * 1024;

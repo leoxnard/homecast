@@ -5,7 +5,7 @@
  */
 type StorageRequest =
   | { op: "open"; dir: string; name: string; resume: boolean }
-  | { op: "write"; data: ArrayBuffer }
+  | { op: "write"; data: ArrayBuffer; at?: number }
   | { op: "close" };
 
 interface SyncHandle {
@@ -33,13 +33,14 @@ self.onmessage = async (event: MessageEvent<StorageRequest>) => {
     } else if (message.op === "write") {
       if (!handle) throw new Error("not open");
       const bytes = new Uint8Array(message.data);
+      const start = message.at ?? position;
       let done = 0;
       while (done < bytes.byteLength) {
-        const n = handle.write(bytes.subarray(done), { at: position + done });
+        const n = handle.write(bytes.subarray(done), { at: start + done });
         if (n <= 0) throw new Error("storage full");
         done += n;
       }
-      position += done;
+      position = Math.max(position, start + done);
       self.postMessage({ ok: true });
     } else if (message.op === "close") {
       handle?.flush();

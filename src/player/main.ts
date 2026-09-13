@@ -16,6 +16,7 @@ import { WakeLock } from "./wakelock.ts";
 import { Library } from "./library.ts";
 import { ChapterEditor } from "./chapter-editor.ts";
 import { captureThumbnail } from "./thumbnail.ts";
+import { SharePanel } from "./share/share-panel.ts";
 import {
   entryId, getEntry, patchEntry, putEntry, requestAccess, queryAccess,
   type LibraryEntry,
@@ -236,6 +237,7 @@ async function remember(): Promise<void> {
     artist: existing?.artist,
     shareUrl: existing?.shareUrl,
     relayPath: existing?.relayPath,
+    shares: existing?.shares,
     addedAt: existing?.addedAt ?? now,
     lastOpenedAt: now,
   };
@@ -443,8 +445,10 @@ function refreshShare(progress?: number, samples?: Array<{ t: number; b: number 
 }
 
 let pingvin: PingvinStatus = { enabled: false };
+let pingvinChecked = false;
 void pingvinStatus().then((status) => {
   pingvin = status;
+  pingvinChecked = true;
   roomPanel.setPingvin(status.enabled);
 });
 
@@ -558,9 +562,9 @@ async function onOffer(from: string, offer: FileOffer): Promise<void> {
 function showInvite(name?: string, size?: number): void {
   transferCard.show({
     title: "A video was shared with you",
-    detail: name ? `${name}${size ? ` · ${formatBytes(size)}` : ""}` : "Download it, then watch it together in sync",
+    detail: name ? `${name}${size ? ` · ${formatBytes(size)}` : ""}` : "Download it, then watch it",
     tone: "invite",
-    actions: [{ label: "Download & watch together", primary: true, run: acceptInvite }],
+    actions: [{ label: room.roomCode ? "Download & watch together" : "Download & watch", primary: true, run: acceptInvite }],
   });
 }
 
@@ -691,7 +695,7 @@ receiver.onState = (state: ReceiveState) => {
       });
       return;
     case "done":
-      transferCard.show({ title: "Downloaded", detail: "Opening it and joining the others…", tone: "done" });
+      transferCard.show({ title: "Downloaded", detail: room.roomCode ? "Opening it and joining the others…" : "Opening it…", tone: "done" });
       openReceived(state.file, state.handle);
       return;
   }
@@ -811,6 +815,26 @@ function leaveRoom(): void {
   toast("Left the room");
 }
 
+const sharePanel = new SharePanel({
+  onClose: closePanel,
+  pingvin: () => pingvin,
+  saved: () => entry?.shares ?? [],
+  save: (link) => {
+    if (!entry) return;
+    const shares = [link, ...(entry.shares ?? [])].slice(0, 20);
+    entry = { ...entry, shares };
+    void patchEntry(entry.id, { shares });
+  },
+});
+
+async function showShare(): Promise<void> {
+  library.setVisible(false);
+  showPanel(sharePanel.root);
+  if (!pingvinChecked) pingvin = await pingvinStatus();
+  pingvinChecked = true;
+  await sharePanel.open(opened?.file.size ? opened.file : undefined);
+}
+
 function showRoom(): void {
   refreshShare();
   showPanel(roomPanel.root);
@@ -827,6 +851,7 @@ const hud = new Hud({
   onShowLibrary: () => void showLibrary(),
   onShowChapters: showChapters,
   onShowRoom: showRoom,
+  onShowShare: () => void showShare(),
 });
 document.body.append(hud.root);
 
@@ -1029,13 +1054,13 @@ const roomFromUrl = location.pathname.startsWith(ROOM_PATH)
 const linkParams = new URLSearchParams(location.search);
 /** Opened a "watch this video with me" link rather than a plain room invite. */
 const invite: { name?: string; size?: number } | undefined =
-  roomFromUrl && linkParams.get("get") === "1"
+  linkParams.get("get") === "1"
     ? { name: linkParams.get("n") ?? undefined, size: Number(linkParams.get("s")) || undefined }
     : undefined;
 
 // Dev-only: `?src=/path.mp4` loads a file over HTTP without the native picker,
 // so the renderer can be driven from a test harness. Never built into production.
-const devSrc = import.meta.env.DEV ? new URLSearchParams(location.search).get("src") : null;
+const devSrc = import.meta.env.DEV && !linkParams.has("get") ? linkParams.get("src") : null;
 if (devSrc) {
   // lastModified must be fixed, or every reload mints a new library entry.
   const devFile = new File([], "dev", { lastModified: 0 });
@@ -1051,9 +1076,9 @@ if (devSrc) {
   });
 }
 
-if (roomFromUrl) {
-  startRoom(roomFromUrl);
-  if (!invite) showRoom();
+if (roomFromUrl || invite) {
+  if (roomFromUrl) startRoom(roomFromUrl);
+  if (roomFromUrl && !invite) showRoom();
   const src = relayPath(linkParams.get("src"));
   if (invite?.name && invite.size) {
     if (src) {
