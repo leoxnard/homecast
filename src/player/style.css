@@ -13,6 +13,11 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute is the only visibility switch the code uses. Any class
+   that sets `display` would otherwise override it — which is how an empty
+   transfer card sat on screen at all times. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
