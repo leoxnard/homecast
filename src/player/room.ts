@@ -20,6 +20,15 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
 ];
 
+/**
+ * 64 KiB: within every browser's SCTP message limit. Measured Chrome → Chrome:
+ * 64 KiB moved 11.5–15 MB/s; 256 KiB with a 16 MB buffer dropped to ~4 MB/s
+ * and stalled — bigger is not faster on a data channel.
+ */
+const FILE_CHUNK = 64 * 1024;
+const FILE_BUFFER_HIGH = 8 * 1024 * 1024;
+const FILE_BUFFER_LOW = 2 * 1024 * 1024;
+
 export type RoomStatus = "idle" | "connecting" | "waiting" | "connected" | "failed" | "closed";
 
 export interface PeerInfo {
@@ -38,8 +47,12 @@ export interface RoomCallbacks {
   onStatus: (status: RoomStatus, detail?: string) => void;
   onPeers: (peers: PeerInfo[]) => void;
   onMessage: (from: string, message: SyncMessage) => void;
-  /** a peer's control/view channel just became usable */
+  /** a peer's control channel just became usable (fires once per peer) */
   onPeerReady: (id: string) => void;
+  /** raw bytes arrived on a peer's file channel */
+  onFileData?: (from: string, data: ArrayBuffer) => void;
+  onFileChannel?: (id: string, open: boolean) => void;
+  onPeerLeft?: (id: string) => void;
 }
 
 interface PeerLink {
@@ -47,9 +60,13 @@ interface PeerLink {
   pc: RTCPeerConnection;
   control?: RTCDataChannel;
   view?: RTCDataChannel;
+  /** raw video bytes for host → friend transfer; binary, ordered, reliable */
+  file?: RTCDataChannel;
   info: PeerInfo;
   /** true when we created the offer */
   initiator: boolean;
+  /** onPeerReady fires once per peer, not once per channel that opens */
+  readyNotified: boolean;
 }
 
 export class Room {
@@ -183,6 +200,7 @@ export class Room {
       pc,
       initiator,
       info: { id, connectionState: pc.connectionState },
+      readyNotified: false,
     };
     this.peers.set(id, link);
 
@@ -205,6 +223,7 @@ export class Room {
     if (initiator) {
       this.bindChannel(link, pc.createDataChannel("control", { ordered: true }));
       this.bindChannel(link, pc.createDataChannel("view", { ordered: false, maxRetransmits: 0 }));
+      this.bindChannel(link, pc.createDataChannel("file", { ordered: true }));
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       this.sendSignal({ type: "signal", to: id, data: { sdp: pc.localDescription } });
@@ -213,11 +232,24 @@ export class Room {
   }
 
   private bindChannel(link: PeerLink, channel: RTCDataChannel): void {
+    if (channel.label === "file") {
+      link.file = channel;
+      channel.binaryType = "arraybuffer";
+      channel.addEventListener("message", (event) => {
+        if (event.data instanceof ArrayBuffer) this.cb.onFileData?.(link.id, event.data);
+      });
+      channel.addEventListener("open", () => this.cb.onFileChannel?.(link.id, true));
+      channel.addEventListener("close", () => this.cb.onFileChannel?.(link.id, false));
+      return;
+    }
     if (channel.label === "control") link.control = channel;
     else if (channel.label === "view") link.view = channel;
 
     channel.addEventListener("open", () => {
-      if (link.control?.readyState === "open") this.cb.onPeerReady(link.id);
+      if (link.control?.readyState === "open" && !link.readyNotified) {
+        link.readyNotified = true;
+        this.cb.onPeerReady(link.id);
+      }
       this.cb.onStatus("connected");
       this.emitPeers();
     });
@@ -266,8 +298,10 @@ export class Room {
   private dropPeer(id: string): void {
     const link = this.peers.get(id);
     if (!link) return;
+    this.cb.onPeerLeft?.(id);
     link.control?.close();
     link.view?.close();
+    link.file?.close();
     link.pc.close();
     this.peers.delete(id);
     this.emitPeers();
@@ -295,6 +329,56 @@ export class Room {
   sendTo(id: string, message: SyncMessage): void {
     const link = this.peers.get(id);
     if (link?.control?.readyState === "open") link.control.send(JSON.stringify(message));
+  }
+
+  /**
+   * Send one chunk of file bytes to a peer, waiting while the channel's send
+   * buffer is full. Without this back-pressure the browser queues the whole
+   * file in memory — fatal at 88 GB — and eventually closes the channel.
+   */
+  async sendFileChunk(id: string, chunk: ArrayBuffer): Promise<boolean> {
+    const channel = this.peers.get(id)?.file;
+    if (!channel || channel.readyState !== "open") return false;
+    if (channel.bufferedAmount > FILE_BUFFER_HIGH) {
+      channel.bufferedAmountLowThreshold = FILE_BUFFER_LOW;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          channel.removeEventListener("bufferedamountlow", done);
+          channel.removeEventListener("close", done);
+          resolve();
+        };
+        channel.addEventListener("bufferedamountlow", done);
+        channel.addEventListener("close", done);
+      });
+      if (channel.readyState !== "open") return false;
+    }
+    channel.send(chunk);
+    return true;
+  }
+
+  /**
+   * Resolve once everything queued on the file channel has actually left.
+   * Control messages travel on a different SCTP stream with no ordering
+   * relative to this one, so "file-end" sent before draining overtakes the
+   * last megabytes of data — measured: a transfer "ended" 2.25 MB short.
+   */
+  async drainFileChannel(id: string): Promise<boolean> {
+    const channel = this.peers.get(id)?.file;
+    if (!channel) return false;
+    while (channel.readyState === "open" && channel.bufferedAmount > 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return channel.readyState === "open";
+  }
+
+  /** Largest message this peer connection accepts, capped for cross-browser safety. */
+  fileChunkSize(id: string): number {
+    const max = this.peers.get(id)?.pc.sctp?.maxMessageSize ?? 0;
+    return Math.max(16 * 1024, Math.min(max || FILE_CHUNK, FILE_CHUNK));
+  }
+
+  isFileChannelOpen(id: string): boolean {
+    return this.peers.get(id)?.file?.readyState === "open";
   }
 
   setRtt(id: string, rtt: number): void {

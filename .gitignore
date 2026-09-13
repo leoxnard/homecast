@@ -4,3 +4,4 @@ dist/
 *.local
 out/
 dist-server/
+public/

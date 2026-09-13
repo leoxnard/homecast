@@ -26,6 +26,13 @@ import { Room, type PeerInfo, type RoomStatus } from "./room.ts";
 import { Sync, type PeerGaze } from "./sync.ts";
 import { Presence } from "./presence.ts";
 import { RoomPanel } from "./room-panel.ts";
+import { FileSender, FileReceiver, type ReceiveState } from "./transfer/p2p.ts";
+import { TransferCard } from "./transfer/transfer-card.ts";
+import {
+  canSaveToDisk, checkBrowserStorage, openBrowserStorageSink, openDiskSink,
+  findInBrowserStorage, partialInBrowserStorage, deleteFromBrowserStorage, type Sink,
+} from "./transfer/sinks.ts";
+import type { FileMessage, FileOffer } from "../shared/protocol.ts";
 import { ROOM_PATH, safeHttpUrl } from "../shared/protocol.ts";
 
 const canvasElement = document.querySelector<HTMLCanvasElement>("#view");
@@ -230,6 +237,8 @@ async function remember(): Promise<void> {
   // Peers only heard our identity at connect time; now there is a file to describe.
   roomPanel.setMyFile(opened?.name, record.shareUrl);
   sync.announce();
+  if (offerVideo) sender.offer(opened.file, record.duration);
+  refreshSending();
 
   // Resume from whatever the store actually holds. Deciding it here rather than
   // in load() means it works the same however the file was opened.
@@ -314,14 +323,200 @@ const room = new Room({
     roomPanel.setPeers(peers);
     hud.setRoom(room.roomCode, undefined, peers.length);
   },
-  onMessage: (from, message) => sync.handle(from, message),
+  onMessage: (from, message) => {
+    if (message.type.startsWith("file-")) handleFileMessage(from, message as FileMessage);
+    else sync.handle(from, message);
+  },
   onPeerReady: (id) => {
     sync.greet(id);
+    if (offerVideo && opened?.file.size) sender.offerTo(id);
     toast("Someone joined the room");
+  },
+  onFileData: (from, data) => receiver.data(from, data),
+  onPeerLeft: (id) => {
+    sync.dropPeer(id);
+    sender.peerLeft(id);
+    if (receiver.current?.from === id) void receiver.interrupt("the host left the room");
+    if (pendingOffer?.from === id) pendingOffer = undefined;
   },
 });
 
+// --- host → friend video transfer --------------------------------------------
+
+const sender = new FileSender(room);
+const receiver = new FileReceiver(room);
+const transferCard = new TransferCard();
+document.body.append(transferCard.root);
+
+/** Host: whether people who join may download the video being played. */
+let offerVideo = false;
+/** Friend: arrived via a "get the video" link, so start without asking. */
+let autoGet = new URLSearchParams(location.search).get("get") === "1";
+/** Friend: the most recent offer, kept so an interrupted transfer can resume. */
+let pendingOffer: { from: string; offer: FileOffer } | undefined;
+/** Friend: jump onto the host's playhead once the received file has loaded. */
+let catchUpPending = false;
+
+sender.onProgress = () => refreshSending();
+sender.onFinished = () => refreshSending();
+
+function refreshSending(): void {
+  roomPanel.setOffer(!!opened?.file.size, offerVideo, sender.sendingTo.length);
+}
+
+function setOfferVideo(on: boolean): void {
+  offerVideo = on && !!opened?.file.size;
+  sender.offer(offerVideo ? opened?.file : undefined, Number.isFinite(video.duration) ? video.duration : undefined);
+  refreshSending();
+}
+
+const isOpen = (offer: FileOffer): boolean =>
+  !!opened && opened.name === offer.name && opened.size === offer.size;
+
+function handleFileMessage(from: string, message: FileMessage): void {
+  if (message.type === "file-request" || (message.type === "file-cancel" && sender.sendingTo.includes(from))) {
+    sender.handle(from, message);
+    return;
+  }
+  if (message.type === "file-offer") {
+    void onOffer(from, message);
+    return;
+  }
+  receiver.handle(from, message);
+}
+
+async function onOffer(from: string, offer: FileOffer): Promise<void> {
+  pendingOffer = { from, offer };
+  if (isOpen(offer) || receiver.busy) return;
+
+  // Already downloaded earlier? Open that copy instead of fetching it again.
+  const stored = await findInBrowserStorage(offer.name, offer.size);
+  if (stored) {
+    transferCard.show({ title: `You already have ${offer.name}`, detail: "Opening it…", tone: "done" });
+    openReceived(stored, undefined);
+    return;
+  }
+
+  if (autoGet) {
+    void startReceive(false);
+    return;
+  }
+  transferCard.show({
+    title: `The host is sharing ${offer.name}`,
+    detail: `${formatBytes(offer.size)} · it downloads to this device, then plays in sync`,
+    actions: [
+      { label: "Download & watch", primary: true, run: () => void startReceive(true) },
+      ...(canSaveToDisk() ? [{ label: "Save as file…", run: () => void startReceive(true, "disk") }] : []),
+      { label: "Not now", run: () => transferCard.hide() },
+    ],
+  });
+}
+
+/**
+ * Pick where the bytes go and start. Browser storage needs no dialog, so it
+ * works for the automatic path; a real file needs a click (Chrome/Edge only).
+ */
+async function startReceive(fromClick: boolean, prefer?: "disk"): Promise<void> {
+  const target = pendingOffer;
+  if (!target) return;
+  const { from, offer } = target;
+
+  let sink: Sink | undefined;
+  try {
+    if (prefer === "disk" && canSaveToDisk()) {
+      sink = await openDiskSink(offer.name);
+    } else {
+      let partial = await partialInBrowserStorage(offer.name);
+      if (partial > offer.size) {
+        await deleteFromBrowserStorage(offer.name);
+        partial = 0;
+      }
+      const room = await checkBrowserStorage(offer.size, partial);
+      if (room.ok) {
+        sink = await openBrowserStorageSink(offer.name, partial > 0);
+      } else if (canSaveToDisk() && fromClick) {
+        sink = await openDiskSink(offer.name);
+      } else if (canSaveToDisk()) {
+        transferCard.show({
+          title: `${offer.name} is too big for browser storage`,
+          detail: `${formatBytes(offer.size)} needed, ${formatBytes(room.availableBytes)} available — save it as a file instead`,
+          tone: "warn",
+          actions: [{ label: "Save as file…", primary: true, run: () => void startReceive(true, "disk") }],
+        });
+        return;
+      } else {
+        transferCard.show({
+          title: `Not enough space for ${offer.name}`,
+          detail:
+            `It is ${formatBytes(offer.size)}, but this browser can store ${formatBytes(room.availableBytes)} here. ` +
+            "Free up disk space, or join from Chrome, which can save it as a normal file.",
+          tone: "warn",
+          actions: [{ label: "Try again", run: () => void startReceive(true) }],
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    if ((err as DOMException).name === "AbortError") return; // closed the save dialog
+    transferCard.show({ title: "Could not start the download", detail: (err as Error).message, tone: "warn" });
+    return;
+  }
+  receiver.start(from, offer, sink);
+}
+
+receiver.onState = (state: ReceiveState) => {
+  const name = pendingOffer?.offer.name ?? receiver.current?.offer.name ?? "the video";
+  switch (state.phase) {
+    case "receiving":
+      transferCard.progress(name, state.received, state.size, state.bytesPerSecond, () => receiver.cancel());
+      return;
+    case "interrupted":
+      transferCard.show({
+        title: state.reason === "cancelled" ? "Download paused" : `Download paused — ${state.reason}`,
+        detail: `${formatBytes(state.received)} of ${formatBytes(state.size)} kept on this device`,
+        progress: state.size ? state.received / state.size : 0,
+        tone: "warn",
+        actions: pendingOffer ? [{ label: "Resume", primary: true, run: () => void startReceive(true) }] : [],
+      });
+      return;
+    case "failed":
+      transferCard.show({
+        title: "Download failed",
+        detail: state.reason,
+        tone: "warn",
+        actions: pendingOffer ? [{ label: "Try again", run: () => void startReceive(true) }] : [],
+      });
+      return;
+    case "done":
+      transferCard.show({ title: `${name} downloaded`, detail: "Opening and joining playback…", tone: "done" });
+      openReceived(state.file, state.handle);
+      return;
+  }
+};
+
+function openReceived(file: File, handle: FileSystemFileHandle | undefined): void {
+  autoGet = false;
+  catchUpPending = true;
+  void load({ name: file.name, size: file.size, url: URL.createObjectURL(file), file, handle });
+  setTimeout(() => transferCard.hide(), 4000);
+}
+
 const sync = new Sync(room, {
+  onCatchUp: (t, playing) => {
+    video.currentTime = t;
+    if (!playing) return;
+    video.play().catch(() => {
+      // Autoplay with sound needs a gesture the automatic path never had.
+      transferCard.show({
+        title: "Ready — the others are already watching",
+        tone: "done",
+        actions: [{ label: "▶ Join playback", primary: true, run: () => {
+          transferCard.hide();
+          sync.catchUp() || void video.play();
+        } }],
+      });
+    });
+  },
   video: () => video,
   view: () => viewer.state,
   applyView: (v: ViewDirection) => {
@@ -349,6 +544,11 @@ const roomPanel = new RoomPanel({
   onResync: () => sync.resync(),
   onClose: closePanel,
   onShareUrl: (raw) => void setShareUrl(raw),
+  onOfferVideo: (on) => setOfferVideo(on),
+  onCopyVideoLink: () => {
+    setOfferVideo(true);
+    return `${location.origin}${ROOM_PATH}${room.roomCode}?get=1`;
+  },
 });
 
 /** Save the download link for the open file and tell everyone in the room. */
@@ -393,6 +593,7 @@ function leaveRoom(): void {
 
 function showRoom(): void {
   roomPanel.setMyFile(opened?.name, entry?.shareUrl);
+  refreshSending();
   showPanel(roomPanel.root);
 }
 
@@ -466,6 +667,15 @@ video.addEventListener("error", () => {
   );
 });
 video.addEventListener("loadedmetadata", () => {
+  // Catch up before touching the library: joining in sync must not wait on
+  // IndexedDB, which can be slow, blocked by another tab, or unavailable
+  // (Safari private browsing).
+  if (catchUpPending && room.roomCode) {
+    catchUpPending = false;
+    sync.announce();
+    // The owner's heartbeat arrives every second; give it one if none is stored yet.
+    if (!sync.catchUp()) setTimeout(() => sync.catchUp(), 1200);
+  }
   void remember();
 
   if (video.videoWidth > capability.maxTextureSize) {
@@ -624,7 +834,7 @@ if (import.meta.env.DEV) {
   Object.assign(window as unknown as Record<string, unknown>, {
     __homecast: {
       viewer, video, capability, library, chapterEditor, room, sync, presence, roomPanel,
-      startRoom, leaveRoom,
+      startRoom, leaveRoom, load, sender, receiver,
       get chapters() { return chapters; },
       get entry() { return entry; },
     },

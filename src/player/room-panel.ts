@@ -12,6 +12,10 @@ export interface RoomPanelCallbacks {
   onClose: () => void;
   /** save (or clear, with "") the download link for the file you have open */
   onShareUrl: (url: string) => void;
+  /** let people who join download the playing video straight from this browser */
+  onOfferVideo: (on: boolean) => void;
+  /** turn offering on and return the room link that downloads automatically */
+  onCopyVideoLink: () => string;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -40,6 +44,10 @@ export class RoomPanel {
   private readonly shareSave: HTMLButtonElement;
   private readonly shareLabel: HTMLElement;
   private readonly getFile: HTMLElement;
+  private readonly sendBox: HTMLElement;
+  private readonly offerToggle: HTMLInputElement;
+  private readonly offerStatus: HTMLElement;
+  private readonly copyVideoLink: HTMLButtonElement;
 
   constructor(cb: RoomPanelCallbacks) {
     this.cb = cb;
@@ -122,6 +130,33 @@ export class RoomPanel {
     const controls = el("div", "room-actions");
     controls.append(lockLabel, el("div", "spacer"), resync, leave);
 
+    // --- send the video directly ------------------------------------------
+    this.sendBox = el("div", "send-box");
+    const sendTitle = el("div", "send-title", "Send them the video");
+    this.copyVideoLink = el("button", "btn primary-small", "Copy link with video");
+    this.copyVideoLink.title = "Whoever opens it downloads the video from you, then joins in sync";
+    this.copyVideoLink.addEventListener("click", () => {
+      const url = this.cb.onCopyVideoLink();
+      this.offerToggle.checked = true;
+      const done = () => {
+        this.copyVideoLink.textContent = "Copied";
+        setTimeout(() => (this.copyVideoLink.textContent = "Copy link with video"), 1600);
+      };
+      void navigator.clipboard?.writeText(url).then(done, () => {
+        this.linkEl.value = url;
+        this.linkEl.select();
+      });
+    });
+    const offerLabel = el("label", "toggle");
+    this.offerToggle = el("input");
+    this.offerToggle.type = "checkbox";
+    this.offerToggle.addEventListener("change", () => this.cb.onOfferVideo(this.offerToggle.checked));
+    offerLabel.append(this.offerToggle, el("span", undefined, "Let anyone in this room download it from me"));
+    this.offerStatus = el("div", "dim-text small");
+    const sendRow = el("div", "room-actions");
+    sendRow.append(this.copyVideoLink, offerLabel);
+    this.sendBox.append(sendTitle, sendRow, this.offerStatus);
+
     // --- where to get the file ------------------------------------------
     this.getFile = el("div", "get-file");
     this.getFile.hidden = true;
@@ -147,7 +182,7 @@ export class RoomPanel {
         "Only the link is sent to the others in the room. The video itself never goes through homecast."),
     );
 
-    this.active.append(codeWrap, linkRow, this.statusEl, this.getFile, this.peerList, share, controls);
+    this.active.append(codeWrap, linkRow, this.statusEl, this.getFile, this.peerList, this.sendBox, share, controls);
 
     const note = el("p", "dim-text", connectionNote);
     this.root.append(header, this.idle, this.active, note);
@@ -175,6 +210,17 @@ export class RoomPanel {
   }
 
   private hasOwnFile = false;
+
+  /** Host controls for sending the playing video directly to people who join. */
+  setOffer(hasFile: boolean, on: boolean, sendingCount: number): void {
+    this.sendBox.hidden = !hasFile;
+    this.offerToggle.checked = on;
+    this.offerStatus.textContent = !on
+      ? "Sent straight from this browser to theirs — keep this tab open until they have it."
+      : sendingCount
+        ? `Sending to ${sendingCount} ${sendingCount === 1 ? "person" : "people"} — keep this tab open.`
+        : "Offered to everyone who joins. Keep this tab open while they download.";
+  }
 
   setRoom(code: string): void {
     this.idle.hidden = true;

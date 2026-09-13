@@ -709,3 +709,34 @@ body.has-takeover .hud { opacity: 0; pointer-events: none; }
   font-size: 13px;
 }
 .get-file .download-link { font-size: 14px; font-weight: 600; }
+
+/* --- video transfer ----------------------------------------------------- */
+.send-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.09); }
+.send-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+
+.transfer-card {
+  position: fixed;
+  right: calc(18px + env(safe-area-inset-right));
+  bottom: calc(80px + env(safe-area-inset-bottom));
+  width: min(380px, calc(100vw - 36px));
+  padding: 13px 15px;
+  background: rgba(16, 16, 18, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+  z-index: 12;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.transfer-card[data-tone="warn"] { border-color: rgba(255, 204, 102, 0.55); }
+.transfer-card[data-tone="done"] { border-color: rgba(110, 231, 168, 0.55); }
+.transfer-title { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; }
+.transfer-detail { font-size: 12px; color: var(--dim); line-height: 1.45; }
+.transfer-detail:empty { display: none; }
+.transfer-bar { height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+.transfer-fill { height: 100%; width: 0; background: var(--accent); transition: width 240ms linear; }
+.transfer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.transfer-actions:empty { display: none; }
+@media (max-width: 640px) {
+  .transfer-card { left: 12px; right: 12px; width: auto; bottom: calc(72px + env(safe-area-inset-bottom)); }
+}

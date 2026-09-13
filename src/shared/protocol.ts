@@ -90,6 +90,11 @@ export interface HelloMessage {
    * receipt — render only after `safeHttpUrl`.
    */
   shareUrl?: string;
+  /**
+   * Sender's clock when it joined the room. The timeline belongs to whoever
+   * has the video loaded and has been here longest — not to an id's sort order.
+   */
+  joinedAt?: number;
 }
 
 /** Accept only http(s) URLs from a peer; anything else (javascript:, data:) is dropped. */
@@ -103,7 +108,39 @@ export function safeHttpUrl(raw: unknown): string | undefined {
   }
 }
 
-export type SyncMessage = ClockPing | ClockPong | StateMessage | ControlMessage | ViewMessage | HelloMessage;
+/** Identifies a file without its contents — the same triple the library keys on. */
+export interface FileIdentity {
+  name: string;
+  size: number;
+  lastModified: number;
+}
+
+/** Host → peer: "I can send you the video I'm playing." */
+export interface FileOffer extends FileIdentity {
+  type: "file-offer";
+  duration?: number;
+}
+
+/** Peer → host: "send it, starting at this byte" (non-zero offset = resume). */
+export interface FileRequest extends FileIdentity {
+  type: "file-request";
+  offset: number;
+}
+
+/** Either side: stop sending / stop expecting. */
+export interface FileCancel extends FileIdentity {
+  type: "file-cancel";
+}
+
+/** Host → peer: all bytes from the requested offset have been queued. */
+export interface FileEnd extends FileIdentity {
+  type: "file-end";
+}
+
+export type FileMessage = FileOffer | FileRequest | FileCancel | FileEnd;
+
+export type SyncMessage =
+  | ClockPing | ClockPong | StateMessage | ControlMessage | ViewMessage | HelloMessage | FileMessage;
 
 // --- tuning -----------------------------------------------------------------
 

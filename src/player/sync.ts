@@ -39,6 +39,8 @@ export interface SyncHooks {
   onNotice: (message: string, warn?: boolean) => void;
   /** file name + duration advertised to peers, to catch mismatched files */
   identity: () => { name: string; file?: string; duration?: number; shareUrl?: string };
+  /** called when this peer should jump onto the shared timeline (just loaded a file) */
+  onCatchUp?: (t: number, playing: boolean) => void;
 }
 
 interface PeerClock {
@@ -52,6 +54,11 @@ export class Sync {
   private readonly room: Room;
   private readonly hooks: SyncHooks;
   private readonly clocks = new Map<string, PeerClock>();
+  /** what each peer last told us about itself, for choosing the timeline owner */
+  private readonly peers = new Map<string, { joinedAt?: number; hasVideo: boolean }>();
+  /** latest state heartbeat per peer, for catching up after loading a file */
+  private readonly lastState = new Map<string, { t: number; playing: boolean; at: number }>();
+  private joinedAt = Date.now();
   private readonly gazes = new Map<string, PeerGaze>();
 
   /** local clock time of our last deliberate view movement */
@@ -86,6 +93,7 @@ export class Sync {
 
   start(): void {
     this.stop();
+    this.joinedAt = Date.now();
     this.clockTimer = window.setInterval(() => this.probeClocks(), 5000);
     this.stateTimer = window.setInterval(() => this.broadcastState(), STATE_INTERVAL_MS);
     this.viewTimer = window.setInterval(() => this.flushView(), 1000 / VIEW_HZ);
@@ -96,21 +104,33 @@ export class Sync {
     this.stateTimer = this.viewTimer = this.clockTimer = undefined;
     this.clocks.clear();
     this.gazes.clear();
+    this.peers.clear();
+    this.lastState.clear();
     this.restoreRate();
     this.hooks.onGaze([]);
   }
 
   /** Say hello and start measuring the clock offset. */
   greet(peerId: string): void {
-    const id = this.hooks.identity();
-    this.room.sendTo(peerId, { type: "hello", name: id.name, file: id.file, duration: id.duration, shareUrl: id.shareUrl });
+    this.room.sendTo(peerId, this.helloMessage());
     this.room.sendTo(peerId, { type: "clock-ping", c0: Date.now() });
   }
 
   /** Re-send who we are — after opening a file or changing the share link. */
   announce(): void {
+    this.room.broadcastControl(this.helloMessage());
+  }
+
+  private helloMessage(): Extract<SyncMessage, { type: "hello" }> {
     const id = this.hooks.identity();
-    this.room.broadcastControl({ type: "hello", name: id.name, file: id.file, duration: id.duration, shareUrl: id.shareUrl });
+    return {
+      type: "hello",
+      name: id.name,
+      file: id.file,
+      duration: id.duration,
+      shareUrl: id.shareUrl,
+      joinedAt: this.joinedAt,
+    };
   }
 
   private probeClocks(): void {
@@ -186,6 +206,7 @@ export class Sync {
       }
 
       case "hello": {
+        this.peers.set(from, { joinedAt: message.joinedAt, hasVideo: !!message.duration });
         const mine = this.hooks.identity();
         if (
           message.duration && mine.duration &&
@@ -207,6 +228,9 @@ export class Sync {
         return;
 
       case "state":
+        this.lastState.set(from, { t: message.t, playing: message.playing, at: message.at });
+        // A state heartbeat implies the sender has the video loaded.
+        this.peers.set(from, { ...this.peers.get(from), hasVideo: true });
         this.correctDrift(from, message.t, message.playing, message.at);
         return;
 
@@ -244,8 +268,42 @@ export class Sync {
    * peer computes the same answer, and it survives someone leaving. Without it
    * each peer corrects toward the other and they oscillate instead of settling.
    */
+  /**
+   * The peer whose playhead everyone follows: among those with the video
+   * loaded, the one that joined first (clock-offset corrected), id as a
+   * tie-break. A friend still downloading can never take the timeline, and a
+   * late joiner never drags the host back to 0:00.
+   *
+   * This replaced "lowest id wins", which compared ids as strings — so p10
+   * sorted before p9 and a newcomer could become owner.
+   */
   private timelineOwner(): string {
-    return this.room.allIds()[0] ?? "";
+    const candidates: Array<{ id: string; joinedAt: number }> = [];
+    const mine = this.hooks.identity();
+    if (mine.duration) candidates.push({ id: this.room.id, joinedAt: this.joinedAt });
+    for (const [id, info] of this.peers) {
+      if (!info.hasVideo) continue;
+      const offset = this.clocks.get(id)?.offset ?? 0;
+      candidates.push({ id, joinedAt: (info.joinedAt ?? Number.MAX_SAFE_INTEGER) - offset });
+    }
+    candidates.sort((a, b) => a.joinedAt - b.joinedAt || (a.id < b.id ? -1 : 1));
+    return candidates[0]?.id ?? "";
+  }
+
+  /**
+   * Jump onto the owner's timeline — after a file finishes loading, where a
+   * paused newcomer would otherwise never be corrected (drift correction only
+   * runs while both sides play).
+   */
+  catchUp(): boolean {
+    const owner = this.timelineOwner();
+    if (!owner || owner === this.room.id) return false;
+    const state = this.lastState.get(owner);
+    if (!state) return false;
+    const t = state.t + (state.playing ? this.ageSeconds(owner, state.at) : 0);
+    this.remoteAppliedAt = Date.now();
+    this.hooks.onCatchUp?.(t, state.playing);
+    return true;
   }
 
   private correctDrift(from: string, remoteT: number, remotePlaying: boolean, at: number): void {
@@ -363,6 +421,8 @@ export class Sync {
   }
 
   dropPeer(id: string): void {
+    this.peers.delete(id);
+    this.lastState.delete(id);
     this.clocks.delete(id);
     this.gazes.delete(id);
     this.warnedMismatch.delete(id);
