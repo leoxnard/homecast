@@ -209,6 +209,8 @@ async function load(next: OpenedVideo, known?: LibraryEntry): Promise<void> {
   toast(`${next.name} · ${formatBytes(next.size)}`);
 }
 
+const THUMBNAIL_VERSION = 2;
+
 /** Record the entry once we know the file's real dimensions and duration. */
 async function remember(): Promise<void> {
   if (!opened) return;
@@ -227,6 +229,7 @@ async function remember(): Promise<void> {
     width: video.videoWidth || existing?.width,
     height: video.videoHeight || existing?.height,
     thumbnail: existing?.thumbnail,
+    thumbnailVersion: existing?.thumbnailVersion,
     resumeAt: existing?.resumeAt,
     chapters: chapters.length ? chapters : (existing?.chapters ?? []),
     title: existing?.title,
@@ -258,9 +261,9 @@ async function remember(): Promise<void> {
   }
   resumePending = false;
 
-  if (!record.thumbnail) {
-    const thumb = await captureThumbnail(video);
-    if (thumb) await patchEntry(id, { thumbnail: thumb.blob });
+  if (!record.thumbnail || record.thumbnailVersion !== THUMBNAIL_VERSION) {
+    const thumb = await captureThumbnail(video, (w) => viewer.snapshot(w));
+    if (thumb) await patchEntry(id, { thumbnail: thumb.blob, thumbnailVersion: THUMBNAIL_VERSION });
   }
 }
 
@@ -1062,6 +1065,16 @@ if (roomFromUrl) {
   } else if (invite) {
     showInvite();
   }
+}
+
+if (import.meta.env.DEV) {
+  const report = (...parts: unknown[]) =>
+    void fetch("/__log", { method: "POST", body: parts.map((p) => (p instanceof Error ? `${p.name}: ${p.message}` : String(p))).join(" ") }).catch(() => {});
+  window.addEventListener("error", (e) => report("error", e.message, e.filename, e.lineno));
+  window.addEventListener("unhandledrejection", (e) => report("rejection", e.reason));
+  const origError = console.error.bind(console);
+  console.error = (...args: unknown[]) => (report("console.error", ...args), origError(...args));
+  (window as unknown as { __report: typeof report }).__report = report;
 }
 
 // Dev-only: `?devhost=CODE` hosts public/__send.mp4 in that room and shares it

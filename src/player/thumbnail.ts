@@ -20,7 +20,11 @@ export interface Thumbnail {
  * The draw downsamples an 8192×4096 frame in one go. It is not free, but it
  * happens once per file rather than per render.
  */
-export async function captureThumbnail(video: HTMLVideoElement, at?: number): Promise<Thumbnail | undefined> {
+export async function captureThumbnail(
+  video: HTMLVideoElement,
+  grab: (width: number) => Promise<Blob | undefined>,
+  at?: number,
+): Promise<Thumbnail | undefined> {
   if (!video.videoWidth || !Number.isFinite(video.duration)) return undefined;
 
   const wasPaused = video.paused;
@@ -31,17 +35,9 @@ export async function captureThumbnail(video: HTMLVideoElement, at?: number): Pr
     if (!wasPaused) video.pause();
     await seekTo(video, target);
 
-    const height = Math.round((THUMB_WIDTH * video.videoHeight) / video.videoWidth);
-    const canvas = document.createElement("canvas");
-    canvas.width = THUMB_WIDTH;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return undefined;
-    ctx.drawImage(video, 0, 0, THUMB_WIDTH, height);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.72),
-    );
+    // One decoded frame must reach the element after the seek before it can be read.
+    await nextFrame(video);
+    const blob = await grab(THUMB_WIDTH);
     return blob ? { blob, at: target } : undefined;
   } catch {
     return undefined;
@@ -49,6 +45,20 @@ export async function captureThumbnail(video: HTMLVideoElement, at?: number): Pr
     await seekTo(video, previousTime).catch(() => {});
     if (!wasPaused) await video.play().catch(() => {});
   }
+}
+
+function nextFrame(video: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve) => {
+    if ("requestVideoFrameCallback" in video) {
+      const timer = setTimeout(resolve, 1000); // a paused element may not present another frame
+      video.requestVideoFrameCallback(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    } else {
+      setTimeout(resolve, 150);
+    }
+  });
 }
 
 function seekTo(video: HTMLVideoElement, time: number): Promise<void> {

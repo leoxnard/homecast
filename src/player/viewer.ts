@@ -11,7 +11,7 @@
 import {
   Mesh, PerspectiveCamera, OrthographicCamera, Scene, PlaneGeometry, ShaderMaterial,
   VideoTexture, WebGLRenderer, NoColorSpace, LinearFilter, RepeatWrapping,
-  ClampToEdgeWrapping, MathUtils,
+  ClampToEdgeWrapping, MathUtils, WebGLRenderTarget, RGBAFormat, UnsignedByteType,
 } from "three";
 
 export interface ViewState {
@@ -183,6 +183,63 @@ export class Viewer {
   }
 
   private readonly bumpFrame = () => void this.frameVersion++;
+
+  /**
+   * The current video frame, downscaled, as a JPEG. Read back through WebGL
+   * rather than drawn into a 2D canvas: Safari paints hardware-decoded video
+   * into a 2D canvas as solid black, but uploads it to WebGL correctly (it is
+   * what the player shows). Returns undefined for an all-black frame so the
+   * caller can try again later.
+   */
+  async snapshot(width: number): Promise<Blob | undefined> {
+    const video = this.video;
+    const texture = this.texture;
+    if (!video || !texture || !video.videoWidth) return undefined;
+    const height = Math.round((width * video.videoHeight) / video.videoWidth);
+
+    const target = new WebGLRenderTarget(width, height, { format: RGBAFormat, type: UnsignedByteType, depthBuffer: false });
+    const material = new ShaderMaterial({
+      uniforms: { map: { value: texture } },
+      vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+      fragmentShader: "uniform sampler2D map; varying vec2 vUv; void main() { gl_FragColor = texture2D(map, vUv); }",
+      depthTest: false,
+      depthWrite: false,
+    });
+    const quad = new Mesh(new PlaneGeometry(2, 2), material);
+    quad.frustumCulled = false;
+    const scene = new Scene().add(quad);
+    const pixels = new Uint8Array(width * height * 4);
+    try {
+      texture.needsUpdate = true; // upload the frame on screen now, not at the next video frame
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(scene, this.backdropCamera);
+      this.renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      target.dispose();
+      material.dispose();
+      quad.geometry.dispose();
+      this.lastKey = ""; // the default framebuffer must be redrawn
+    }
+
+    let sum = 0;
+    for (let i = 0; i < pixels.length; i += 97) sum += pixels[i]!;
+    if (sum / (pixels.length / 97) < 3) return undefined;
+
+    // WebGL rows run bottom-up.
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    const image = ctx.createImageData(width, height);
+    const row = width * 4;
+    for (let y = 0; y < height; y++) {
+      image.data.set(pixels.subarray((height - 1 - y) * row, (height - y) * row), y * row);
+    }
+    ctx.putImageData(image, 0, 0);
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(b ?? undefined), "image/jpeg", 0.72));
+  }
 
   /** Something drawn outside the viewer's own state changed (e.g. presence markers). */
   invalidate(): void {

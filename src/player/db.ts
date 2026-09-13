@@ -23,6 +23,8 @@ export interface LibraryEntry {
   width?: number;
   height?: number;
   thumbnail?: Blob;
+  /** 2 = read through WebGL; older ones may be black on Safari and are redone */
+  thumbnailVersion?: number;
   /** seconds — where to pick up again */
   resumeAt?: number;
   chapters: Chapter[];
