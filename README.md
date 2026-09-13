@@ -184,6 +184,16 @@ a WebRTC data channel. The video itself never moves.
   decoder falls behind.
 - If your files differ in length, it says so rather than letting you wonder why
   nothing lines up.
+- **Send them the video.** "Copy link with video" gives a link that downloads the
+  video you are playing, opens it once complete, and joins your playhead — no
+  clicks on their side. Two ways it can travel:
+  - **Directly from your browser** (always available). No server, no size limit;
+    keep your tab open until they have it. Measured ~12–15 MB/s between browsers.
+  - **Via Pingvin** (if configured, see docs/deploy.md). Upload once; they can
+    download even while you are offline.
+
+  Chrome and Edge can save it as a normal file; Safari keeps it in browser
+  storage, and says up front if it will not fit. Interrupted transfers resume.
 - **Share a download link** for your file (Pingvin, Google Drive, …) in the room
   panel. Anyone who joins without the file sees where to get it. Only the link is
   sent; the video never goes through homecast. The link is saved with the video

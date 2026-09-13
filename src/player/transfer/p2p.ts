@@ -57,12 +57,17 @@ export class FileSender {
   }
 
   /** Start (or stop, with undefined) offering a file to everyone in the room. */
-  offer(file: File | undefined, duration?: number): void {
+  /** Relay download path once the file has been uploaded to Pingvin. */
+  private url?: string;
+
+  offer(file: File | undefined, duration?: number, url?: string): void {
     if (this.file && (!file || !sameFile(this.file, file))) {
       for (const peer of [...this.active.keys()]) this.cancel(peer, true);
+      this.url = undefined;
     }
     this.file = file;
     this.duration = duration;
+    if (url !== undefined) this.url = url;
     if (file) this.room.broadcastControl(this.offerMessage(file));
   }
 
@@ -72,7 +77,7 @@ export class FileSender {
   }
 
   private offerMessage(file: File): FileOffer {
-    return { type: "file-offer", ...identity(file), duration: this.duration };
+    return { type: "file-offer", ...identity(file), duration: this.duration, ...(this.url ? { url: this.url } : {}) };
   }
 
   handle(from: string, message: FileMessage): void {

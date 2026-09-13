@@ -13,6 +13,7 @@ export default defineConfig({
     //   terminal 2:  npm run dev
     proxy: {
       "/ws": { target: "ws://127.0.0.1:3000", ws: true },
+      "/api": { target: "http://127.0.0.1:3000" },
     },
   },
   build: {

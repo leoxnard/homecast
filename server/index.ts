@@ -14,6 +14,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { attachSignaling, signalingStats } from "./signaling.ts";
+import { handlePingvin } from "./pingvin.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -91,6 +92,10 @@ function serve(req: IncomingMessage, res: ServerResponse): void {
 }
 
 const server = createServer((req, res) => {
+  if (req.url?.startsWith("/api/pingvin/")) {
+    void handlePingvin(req, res);
+    return;
+  }
   try {
     serve(req, res);
   } catch (err) {

@@ -266,3 +266,44 @@ Two fixes:
 
 Verified in Safari against a server that serves a stale page first: request log
 shows the stale page, its 404ing bundle, one reload, the current bundle, render.
+
+---
+
+## F14. Moving the video itself: what the browsers and Pingvin actually allow
+
+Measured while building "send them the video", because every design choice here
+depends on a limit that is easy to assume wrong.
+
+**Receiving side — the file has to go to disk as it arrives.**
+- Chrome/Edge: `showSaveFilePicker` streams to a real file with no quota.
+- Safari 26: no save picker, but the origin-private file system works well —
+  256 MB written in ~0.1 s, from a worker too, and playable straight from storage.
+  Its **quota was 82.5 GB** on a Mac with ~116 GB free: *less than the 88 GB HQ
+  master*. homecast checks the quota before starting rather than failing at 94%.
+
+**WebRTC data channel, Chrome → Chrome:** 64 KiB chunks moved 11.5–15 MB/s.
+256 KiB chunks with a 16 MB buffer dropped to ~4 MB/s and stalled — bigger is not
+faster. At ~12 MB/s the 88 GB master is roughly two hours, about what the host's
+measured 129 Mbps upload would allow anyway.
+
+**End-of-transfer race:** the "done" message travels on the control channel, a
+different SCTP stream from the data, with no ordering between them. It overtook
+the last 2.25 MB. Completion is now decided by byte count.
+
+**Pingvin 1.13.0** (read from the running container, then exercised against a
+local copy of the same version):
+- no CORS, and auth is an httpOnly `access_token` cookie → a page on another
+  origin can neither call it nor keep a session → homecast relays server-side
+- uploads are raw chunks ≤ `share.chunkSize` (10 MB); the first response returns
+  the file id
+- an out-of-order chunk is rejected with `expectedChunkIndex` — uploads can retry
+  and resume safely; resending a chunk that had arrived still yields an identical file
+- downloads need a per-share token cookie from `POST /api/shares/:id/token`
+- **downloads ignore `Range`** and always start at byte 0 → a resumed download is
+  served by skipping bytes inside homecast (a local read), then sending the rest
+- the owner's instance: **`share.maxSize` = 50 GB**, anonymous shares and
+  registration disabled → the HQ master cannot be uploaded until the limit is raised
+
+Verified through the relay: full download and a resume from byte 13,685,184 both
+produced a SHA-256 identical to the original; with the host having left the room,
+a friend opening the link still downloaded and opened the video.

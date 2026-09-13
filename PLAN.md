@@ -52,7 +52,7 @@ These were each evaluated in depth and rejected. Do not reintroduce them.
 | An 8 TB HDD for the server | Was specced for storing streaming renditions. That reason no longer exists. |
 | AV1 | M1 Max has **no AV1 hardware encoder** (M3+) and no hardware decoder. Software-only at 8K is unusable. |
 | User accounts, auth, view statistics, public sharing | Dropped with the hosting platform. Umami already runs on the server if analytics are ever wanted. |
-| Serving video files via Pingvin-share | Inherits the same disk (same `/dev/sda2`, 163 GB free), ToS and uplink problems. A 100 GB share sits on disk until expiry and would fill the root volume, taking down all 27 containers. |
+| Serving video files via Pingvin-share *(since added as an **opt-in** upload path at the owner's request — off unless configured; see docs/deploy.md. The disk warning below still applies)* | Inherits the same disk (same `/dev/sda2`, 163 GB free), ToS and uplink problems. A 100 GB share sits on disk until expiry and would fill the root volume, taking down all 27 containers. |
 
 ---
 

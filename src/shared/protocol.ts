@@ -119,6 +119,18 @@ export interface FileIdentity {
 export interface FileOffer extends FileIdentity {
   type: "file-offer";
   duration?: number;
+  /**
+   * Same-origin Pingvin relay path, when the host has uploaded the video.
+   * Present → download from the server (host may go offline); absent → P2P.
+   * Untrusted on receipt: only `relayPath()` output is ever fetched.
+   */
+  url?: string;
+}
+
+/** Accept only the exact relay download shape — never an arbitrary URL from a peer. */
+export function relayPath(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  return /^\/api\/pingvin\/download\/[a-zA-Z0-9_-]{3,50}\/[0-9a-f-]{36}$/.test(raw) ? raw : undefined;
 }
 
 /** Peer → host: "send it, starting at this byte" (non-zero offset = resume). */

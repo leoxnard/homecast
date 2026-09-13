@@ -16,6 +16,8 @@ export interface RoomPanelCallbacks {
   onOfferVideo: (on: boolean) => void;
   /** turn offering on and return the room link that downloads automatically */
   onCopyVideoLink: () => string;
+  /** upload the open video to Pingvin through the server relay */
+  onUploadPingvin: () => void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -48,6 +50,12 @@ export class RoomPanel {
   private readonly offerToggle: HTMLInputElement;
   private readonly offerStatus: HTMLElement;
   private readonly copyVideoLink: HTMLButtonElement;
+  private readonly uploadBtn: HTMLButtonElement;
+  private readonly uploadStatus: HTMLElement;
+  private readonly uploadBar: HTMLElement;
+  private readonly uploadFill: HTMLElement;
+  private readonly uploadCancel: HTMLButtonElement;
+  private cancelUpload?: () => void;
 
   constructor(cb: RoomPanelCallbacks) {
     this.cb = cb;
@@ -155,7 +163,24 @@ export class RoomPanel {
     this.offerStatus = el("div", "dim-text small");
     const sendRow = el("div", "room-actions");
     sendRow.append(this.copyVideoLink, offerLabel);
-    this.sendBox.append(sendTitle, sendRow, this.offerStatus);
+
+    // Pingvin: shown only when the server has it configured.
+    this.uploadBtn = el("button", "btn", "Upload to Pingvin");
+    this.uploadBtn.title = "Upload once, so people can download it even while you're offline";
+    this.uploadBtn.hidden = true;
+    this.uploadBtn.addEventListener("click", () => this.cb.onUploadPingvin());
+    this.uploadCancel = el("button", "btn ghost", "Cancel");
+    this.uploadCancel.hidden = true;
+    this.uploadCancel.addEventListener("click", () => this.cancelUpload?.());
+    this.uploadStatus = el("div", "dim-text small");
+    this.uploadBar = el("div", "transfer-bar");
+    this.uploadFill = el("div", "transfer-fill");
+    this.uploadBar.append(this.uploadFill);
+    this.uploadBar.hidden = true;
+    const uploadRow = el("div", "room-actions");
+    uploadRow.append(this.uploadBtn, this.uploadCancel);
+
+    this.sendBox.append(sendTitle, sendRow, this.offerStatus, uploadRow, this.uploadBar, this.uploadStatus);
 
     // --- where to get the file ------------------------------------------
     this.getFile = el("div", "get-file");
@@ -211,15 +236,32 @@ export class RoomPanel {
 
   private hasOwnFile = false;
 
+  setPingvin(enabled: boolean): void {
+    this.uploadBtn.hidden = !enabled;
+  }
+
+  setUpload(message: string, state: "busy" | "done" | "warn", cancel?: () => void, progress?: number): void {
+    this.uploadStatus.textContent = message;
+    this.uploadStatus.className = `dim-text small${state === "warn" ? " warn-text" : ""}`;
+    this.cancelUpload = cancel;
+    this.uploadCancel.hidden = state !== "busy" || !cancel;
+    this.uploadBtn.disabled = state === "busy";
+    this.uploadBtn.textContent = state === "done" ? "Uploaded ✓" : "Upload to Pingvin";
+    this.uploadBar.hidden = progress === undefined;
+    if (progress !== undefined) this.uploadFill.style.width = `${Math.min(1, Math.max(0, progress)) * 100}%`;
+  }
+
   /** Host controls for sending the playing video directly to people who join. */
-  setOffer(hasFile: boolean, on: boolean, sendingCount: number): void {
+  setOffer(hasFile: boolean, on: boolean, sendingCount: number, uploaded = false): void {
     this.sendBox.hidden = !hasFile;
     this.offerToggle.checked = on;
-    this.offerStatus.textContent = !on
-      ? "Sent straight from this browser to theirs — keep this tab open until they have it."
-      : sendingCount
-        ? `Sending to ${sendingCount} ${sendingCount === 1 ? "person" : "people"} — keep this tab open.`
-        : "Offered to everyone who joins. Keep this tab open while they download.";
+    this.offerStatus.textContent = uploaded
+      ? "Offered to everyone who joins. They download it from Pingvin, so you can close this tab."
+      : !on
+        ? "Sent straight from this browser to theirs — keep this tab open until they have it."
+        : sendingCount
+          ? `Sending to ${sendingCount} ${sendingCount === 1 ? "person" : "people"} — keep this tab open.`
+          : "Offered to everyone who joins. Keep this tab open while they download.";
   }
 
   setRoom(code: string): void {

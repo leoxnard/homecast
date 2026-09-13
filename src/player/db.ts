@@ -30,6 +30,8 @@ export interface LibraryEntry {
   artist?: string;
   /** download link for this file (Pingvin, Drive, …) shown to people in a room */
   shareUrl?: string;
+  /** relay download path once uploaded to Pingvin through homecast */
+  relayPath?: string;
   addedAt: number;
   lastOpenedAt: number;
 }

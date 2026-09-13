@@ -60,6 +60,35 @@ production, that upgrade is the first thing to check.
 
 The server answers upgrades on `/ws` only and destroys any other upgrade attempt.
 
+### Optional: Pingvin uploads
+
+Off unless **all four** of these are set on the homecast application in Coolify:
+
+| Variable | Value |
+|---|---|
+| `PINGVIN_URL` | how the homecast container reaches Pingvin — an internal address is best, so uploads do not leave the server and come back through Cloudflare |
+| `PINGVIN_USERNAME` | a Pingvin account allowed to create shares |
+| `PINGVIN_PASSWORD` | its password — lives only in the server environment, never in the browser |
+| `HOMECAST_UPLOAD_KEY` | a long random secret (`openssl rand -hex 24`). The host enters it once when uploading. Without it, anyone who finds homecast could fill the server's disk |
+| `PINGVIN_EXPIRATION` | optional, default `1-week` |
+
+Then, in Pingvin:
+
+- **Raise `share.maxSize`.** The default is 50 GB; one HQ concert master is 88 GB
+  and is refused up front, with a message saying so.
+- **Mind the disk.** The server has a single, non-expandable disk shared with every
+  other container (PLAN §2). Each uploaded master costs ~88 GB until its share expires.
+
+For an internal `PINGVIN_URL`, put homecast on the same Docker network as Pingvin
+(Coolify: the app's *Network* settings). A public `https://share…` URL also works,
+but every upload chunk then makes a round trip through the Cloudflare tunnel.
+
+When configured, the room panel shows **Upload to Pingvin**. Once uploaded, the
+"copy link with video" link carries the download, so a friend can start even while
+the host is offline. Downloads go through homecast (Pingvin enables no CORS), and
+resume after interruptions — Pingvin itself cannot serve byte ranges, so homecast
+skips the already-received bytes on the server side.
+
 ### Health
 
 The container exposes `/healthz`, which returns `ok`. Coolify's health check uses
