@@ -82,62 +82,71 @@ export function probeCapability(): Capability {
   return { ...cap, verdict: judge(cap) };
 }
 
+/**
+ * Every headline has to make sense to someone who has just arrived and done
+ * nothing — so each one names a *file to open*, not a verdict on an action the
+ * reader has not taken. ("This will work" reads as an answer to an unasked
+ * question: what will?)
+ */
 function judge(c: Omit<Capability, "verdict">): Verdict {
   const detail: string[] = [];
 
   if (!c.webgl2) {
     return {
       level: "blocked",
-      headline: "This browser has no WebGL2 — 360° playback is impossible here.",
-      detail: ["Use a current Chrome, Edge, or Safari on a desktop machine."],
+      headline: "This browser can't show 360° video.",
+      detail: ["It has no WebGL2. Use a current Chrome, Edge or Safari on a desktop machine."],
     };
   }
 
   // §5.2 — the hard wall. Not slow: impossible.
   if (c.maxTextureSize < 8192) {
     detail.push(
-      `This GPU caps textures at ${c.maxTextureSize} px (${c.renderer}), so an 8K equirect ` +
-        `frame cannot be bound at all — this is a hard limit, not a speed problem.`,
+      `This GPU caps textures at ${c.maxTextureSize} px (${c.renderer}), so an 8K frame cannot ` +
+        `be displayed at all — a hard limit, not a speed problem.`,
     );
     if (c.maxTextureSize >= 4096) {
-      detail.push("Open a 4K file instead — the homecast fallback command produces 3840×1920.");
-      return { level: "degraded", headline: `Open a ≤${c.maxTextureSize} px file on this machine.`, detail };
+      detail.push("Make a 4K version on your Mac with the homecast fallback command.");
+      return {
+        level: "degraded",
+        headline: `Open a video up to ${c.maxTextureSize} px wide here.`,
+        detail,
+      };
     }
-    return { level: "blocked", headline: "This GPU cannot display 360° video at any useful size.", detail };
+    return { level: "blocked", headline: "This device can't show 360° video at a useful size.", detail };
   }
 
   if (!c.hevcMain10) {
     detail.push(
-      "This browser reports no HEVC Main 10 support, so the 8K master will not decode. " +
-        "On Windows this usually means the OS has no registered HEVC decoder.",
+      "This browser reports no HEVC support, so an 8K HEVC master will not decode. On Windows " +
+        "that usually means the system has no HEVC decoder installed.",
     );
     if (c.h264) {
-      detail.push("Open the H.264 fallback file instead of the master.");
-      return { level: "degraded", headline: "Open the H.264 fallback file, not the master.", detail };
+      detail.push("Make an H.264 version on your Mac with the homecast fallback command.");
+      return { level: "degraded", headline: "Open an H.264 video here, not an HEVC one.", detail };
     }
-    return { level: "blocked", headline: "No usable video decoder found.", detail };
+    return { level: "blocked", headline: "No video decoder this player can use.", detail };
   }
 
   // PLAN §5.2: phones are not the target. Recent ones clear the texture limit,
-  // so this is a caveat rather than a refusal — but say it plainly instead of
-  // letting an 8K master stutter and leaving the viewer to guess why.
+  // so this is guidance about which file to bring, not a refusal.
   if (c.touch) {
+    detail.push("Drag to look around, pinch to zoom, double-tap to recentre.");
     detail.push(
-      "Phones and tablets are not what homecast was built for. Panning and pinch-zoom work, " +
-        "but an 8K master can outrun a mobile decoder.",
+      "An 8K master can outrun a phone's decoder and stutter. A 4K version plays smoothly — " +
+        "make one on your Mac with the homecast fallback command.",
     );
     if (!c.filePicker) {
-      detail.push("This browser cannot remember files, so you will pick the video each time.");
+      detail.push("This browser can't remember files, so you'll pick the video each time.");
     }
-    detail.push("A 4K rendition is the safe choice here — the homecast fallback command makes one.");
-    return { level: "degraded", headline: "This will work, but a 4K file is the better fit.", detail };
+    return { level: "degraded", headline: "Open a 4K video here — 8K can outrun a phone.", detail };
   }
 
   detail.push(`${c.renderer} · textures to ${c.maxTextureSize} px · HEVC Main 10 ${c.hevcMain10}`);
   if (c.devicePixelRatio > 1) detail.push(`Retina display at ${c.devicePixelRatio}× — rendering at full device resolution.`);
   if (!c.filePicker) detail.push("No File System Access API — files open through a normal picker and are not remembered.");
 
-  return { level: "ok", headline: "Ready for 8K 360° playback.", detail };
+  return { level: "ok", headline: "Ready for 8K 360° video.", detail };
 }
 
 /** `canPlayType` is advisory only (§5.3) — confirm against the real file. */

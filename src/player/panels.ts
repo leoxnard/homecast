@@ -28,7 +28,8 @@ export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElemen
   h1.textContent = "homecast";
   const sub = document.createElement("p");
   sub.className = "start-sub";
-  sub.textContent = "360° video that stays on your own machine.";
+  // Says what to do, not what the product is — the reader has just arrived.
+  sub.textContent = "Play a 360° video from this device.";
   brand.append(h1, sub);
 
   // The verdict is one line with a coloured dot — the reasoning lives in the
@@ -95,7 +96,7 @@ export function startPanel(cap: Capability, cb: StartPanelCallbacks): HTMLElemen
 
   const privacy = document.createElement("p");
   privacy.className = "start-privacy";
-  privacy.textContent = "Nothing is uploaded. The file is read straight from your device.";
+  privacy.textContent = "Nothing is uploaded — the file is read straight from your device.";
 
   root.append(brand, verdict, actions, details, privacy);
   return root;
