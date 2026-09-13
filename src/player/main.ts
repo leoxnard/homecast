@@ -736,7 +736,10 @@ const sync = new Sync(room, {
     viewer.look(v.yaw, v.pitch);
     viewer.setFov(v.fov, true);
   },
-  onGaze: (gazes: PeerGaze[]) => presence.update(gazes),
+  onGaze: (gazes: PeerGaze[]) => {
+    presence.update(gazes);
+    viewer.invalidate();
+  },
   onNotice: (message, warn) => toast(message, { warn, ms: warn ? 8000 : 3500 }),
   identity: () => ({
     name: "viewer",
@@ -798,6 +801,7 @@ function leaveRoom(): void {
   room.leave();
   sync.stop();
   presence.clear();
+  viewer.invalidate();
   roomPanel.setIdle();
   hud.setRoom("", "closed", 0);
   history.replaceState(null, "", "/");

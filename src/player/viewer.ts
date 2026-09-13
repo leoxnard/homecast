@@ -111,6 +111,16 @@ export class Viewer {
   private readonly material: ShaderMaterial;
   private texture?: VideoTexture;
   private video?: HTMLVideoElement;
+  /**
+   * Render on demand. A full-screen shader pass at Retina size on every display
+   * refresh (120 Hz on ProMotion) kept the GPU at ~75% even while paused; the
+   * picture only changes when a video frame arrives, the view moves, the canvas
+   * resizes, or an overlay changes.
+   */
+  private frameVersion = 0;
+  private overlayVersion = 0;
+  private lastKey = "";
+  private frameCallback?: number;
 
   yaw = 0;
   pitch = 0;
@@ -161,9 +171,29 @@ export class Viewer {
     this.texture = texture;
     this.material.uniforms.map!.value = texture;
     this.material.uniforms.hasVideo!.value = true;
+    this.frameVersion++;
+    if ("requestVideoFrameCallback" in video) {
+      const onFrame = () => {
+        this.frameVersion++;
+        this.frameCallback = video.requestVideoFrameCallback(onFrame);
+      };
+      this.frameCallback = video.requestVideoFrameCallback(onFrame);
+    }
+    for (const type of ["loadeddata", "seeked", "emptied"]) video.addEventListener(type, this.bumpFrame);
+  }
+
+  private readonly bumpFrame = () => void this.frameVersion++;
+
+  /** Something drawn outside the viewer's own state changed (e.g. presence markers). */
+  invalidate(): void {
+    this.overlayVersion++;
   }
 
   detachVideo(): void {
+    if (this.video && this.frameCallback !== undefined) this.video.cancelVideoFrameCallback(this.frameCallback);
+    this.frameCallback = undefined;
+    for (const type of ["loadeddata", "seeked", "emptied"]) this.video?.removeEventListener(type, this.bumpFrame);
+    this.frameVersion++;
     this.texture?.dispose();
     this.texture = undefined;
     this.video = undefined;
@@ -292,7 +322,15 @@ export class Viewer {
     this.camera.updateProjectionMatrix();
   }
 
-  render(): void {
+  /** Draw if anything visible changed since the last draw. Returns whether it drew. */
+  render(): boolean {
+    const canvas = this.renderer.domElement;
+    // Without requestVideoFrameCallback there is no signal for new frames: draw while playing.
+    const blind = !!this.video && !this.video.paused && !("requestVideoFrameCallback" in this.video);
+    const key = `${this.yaw},${this.pitch},${this.fovDeg},${canvas.width}x${canvas.height},${this.frameVersion},${this.overlayVersion},${!!this.video}`;
+    if (key === this.lastKey && !blind) return false;
+    this.lastKey = key;
+
     const fov = this.fovDeg;
     // Blend rectilinear → stereographic between the two thresholds.
     const t = MathUtils.clamp((fov - RECTILINEAR_MAX_FOV) / (STEREOGRAPHIC_FOV - RECTILINEAR_MAX_FOV), 0, 1);
@@ -322,6 +360,7 @@ export class Viewer {
     );
     this.scene.visible = this.isRectilinear;
     if (this.scene.visible) this.renderer.render(this.scene, this.camera);
+    return true;
   }
 
   dispose(): void {
