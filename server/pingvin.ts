@@ -31,6 +31,11 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
 
 const BASE = process.env.PINGVIN_URL?.replace(/\/+$/, "");
+/**
+ * Upstream failures are reported as 424, not 502: Cloudflare replaces a 5xx body
+ * with its own error page, and the browser would lose the reason.
+ */
+const UPSTREAM = 424;
 const USERNAME = process.env.PINGVIN_USERNAME;
 const PASSWORD = process.env.PINGVIN_PASSWORD;
 const UPLOAD_KEY = process.env.HOMECAST_UPLOAD_KEY;
@@ -43,6 +48,22 @@ const FILE_ID_PATTERN = /^[0-9a-f-]{36}$/;
 
 // --- session ------------------------------------------------------------------
 
+/**
+ * The URL Pingvin actually answers on. A configured http:// URL that redirects
+ * to https:// works for GETs but silently turns every POST into a GET (sign-in
+ * then fails with "Cannot GET /api/auth/signIn"), so follow redirects once with
+ * a GET and use where they end.
+ */
+let resolvedBase: string | undefined;
+async function base(): Promise<string> {
+  if (resolvedBase) return resolvedBase;
+  const res = await fetch(`${BASE}/api/configs`);
+  if (!res.ok) throw new RelayError(UPSTREAM, `could not reach Pingvin (${res.status})`);
+  await res.body?.cancel();
+  resolvedBase = res.url.replace(/\/api\/configs$/, "");
+  return resolvedBase;
+}
+
 let session: { cookie: string; at: number } | undefined;
 /** Pingvin access tokens are short-lived; sign in again well before expiry. */
 const SESSION_MS = 10 * 60 * 1000;
@@ -54,21 +75,21 @@ function cookiesFrom(res: Response): string[] {
 
 async function signIn(): Promise<string> {
   const field = USERNAME?.includes("@") ? "email" : "username";
-  const res = await fetch(`${BASE}/api/auth/signIn`, {
+  const res = await fetch(`${await base()}/api/auth/signIn`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ [field]: USERNAME, password: PASSWORD }),
   });
-  if (!res.ok) throw new RelayError(502, `Pingvin sign-in failed (${res.status})`);
+  if (!res.ok) throw new RelayError(UPSTREAM, res.status === 401 ? "Pingvin rejected PINGVIN_USERNAME / PINGVIN_PASSWORD" : `Pingvin sign-in failed (${res.status})`);
   const cookie = cookiesFrom(res).join("; ");
-  if (!cookie.includes("access_token")) throw new RelayError(502, "Pingvin sign-in returned no session");
+  if (!cookie.includes("access_token")) throw new RelayError(UPSTREAM, "Pingvin sign-in returned no session");
   session = { cookie, at: Date.now() };
   return cookie;
 }
 
 async function authed(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
   const cookie = session && Date.now() - session.at < SESSION_MS ? session.cookie : await signIn();
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${await base()}${path}`, {
     ...init,
     headers: { ...(init.headers as Record<string, string>), cookie },
     // Required by Node's fetch whenever the body is a stream.
@@ -117,8 +138,8 @@ async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 let limits: { maxSize: number; chunkSize: number } | undefined;
 async function pingvinLimits(): Promise<{ maxSize: number; chunkSize: number }> {
   if (limits) return limits;
-  const res = await fetch(`${BASE}/api/configs`);
-  if (!res.ok) throw new RelayError(502, `could not read Pingvin config (${res.status})`);
+  const res = await fetch(`${await base()}/api/configs`);
+  if (!res.ok) throw new RelayError(UPSTREAM, `could not read Pingvin config (${res.status})`);
   const configs = (await res.json()) as Array<{ key: string; value: string }>;
   const get = (k: string) => Number(configs.find((c) => c.key === k)?.value ?? NaN);
   limits = { maxSize: get("share.maxSize"), chunkSize: get("share.chunkSize") };
@@ -179,7 +200,7 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
           description: "Shared from homecast",
         }),
       });
-      if (!created.ok) return json(res, 502, { error: `Pingvin refused the share: ${await created.text()}` }), true;
+      if (!created.ok) return json(res, UPSTREAM, { error: `Pingvin refused the share: ${await created.text()}` }), true;
       return json(res, 200, { shareId, chunkSize }), true;
     }
 
@@ -211,7 +232,7 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
       }
       if (!up.ok) {
         // Pass the expected index through: the browser uses it to resume.
-        return json(res, up.status === 400 ? 409 : 502, {
+        return json(res, up.status === 400 ? 409 : UPSTREAM, {
           error: String(parsed.message ?? text).slice(0, 300),
           expectedChunkIndex: parsed.expectedChunkIndex,
         }), true;
@@ -222,13 +243,13 @@ export async function handlePingvin(req: IncomingMessage, res: ServerResponse): 
     // POST shares/:id/complete
     if (req.method === "POST" && parts[0] === "shares" && parts[2] === "complete" && ID_PATTERN.test(parts[1] ?? "")) {
       const done = await authed(`/api/shares/${parts[1]}/complete`, { method: "POST" });
-      if (!done.ok) return json(res, 502, { error: `Pingvin could not complete the share: ${await done.text()}` }), true;
+      if (!done.ok) return json(res, UPSTREAM, { error: `Pingvin could not complete the share: ${await done.text()}` }), true;
       return json(res, 200, { ok: true }), true;
     }
 
     return json(res, 404, { error: "unknown Pingvin route" }), true;
   } catch (err) {
-    const status = err instanceof RelayError ? err.status : 502;
+    const status = err instanceof RelayError ? err.status : UPSTREAM;
     if (!res.headersSent) json(res, status, { error: (err as Error).message });
     else res.destroy();
     return true;
@@ -239,16 +260,16 @@ async function download(req: IncomingMessage, res: ServerResponse, shareId: stri
   if (!ID_PATTERN.test(shareId) || !FILE_ID_PATTERN.test(fileId)) return json(res, 400, { error: "bad link" });
 
   // Public shares still need a per-share token cookie before files can be read.
-  const token = await fetch(`${BASE}/api/shares/${shareId}/token`, {
+  const token = await fetch(`${await base()}/api/shares/${shareId}/token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",
   });
-  if (!token.ok) return json(res, token.status === 404 ? 404 : 502, { error: "share not found or expired" });
+  if (!token.ok) return json(res, token.status === 404 ? 404 : UPSTREAM, { error: "share not found or expired" });
   const cookie = cookiesFrom(token).join("; ");
 
-  const upstream = await fetch(`${BASE}/api/shares/${shareId}/files/${fileId}?download=true`, { headers: { cookie } });
-  if (!upstream.ok || !upstream.body) return json(res, upstream.status === 404 ? 404 : 502, { error: "file unavailable" });
+  const upstream = await fetch(`${await base()}/api/shares/${shareId}/files/${fileId}?download=true`, { headers: { cookie } });
+  if (!upstream.ok || !upstream.body) return json(res, upstream.status === 404 ? 404 : UPSTREAM, { error: "file unavailable" });
 
   const size = Number(upstream.headers.get("content-length") ?? NaN);
   const range = /^bytes=(\d+)-$/.exec(String(req.headers.range ?? ""));

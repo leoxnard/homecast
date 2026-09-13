@@ -14,7 +14,7 @@ import { safeHttpUrl, type ServerSignal, type SyncMessage } from "../shared/prot
 /**
  * STUN only. A direct path works for the common case of two home connections;
  * symmetric NAT or strict corporate firewalls would need a TURN relay, which
- * would mean routing peer traffic through a server — see `connectionNote()`.
+ * would mean routing peer traffic through a server.
  */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
@@ -28,6 +28,22 @@ const ICE_SERVERS: RTCIceServer[] = [
 const FILE_CHUNK = 64 * 1024;
 const FILE_BUFFER_HIGH = 8 * 1024 * 1024;
 const FILE_BUFFER_LOW = 2 * 1024 * 1024;
+
+export interface PeerRoute {
+  kind: "local" | "internet" | "relay";
+  /** ICE over TCP: works through strict firewalls, but far slower for bulk data */
+  tcp: boolean;
+  rtt?: number;
+}
+
+function isPrivateAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  return (
+    /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.)/.test(address) ||
+    /^(fd|fc|fe80)/i.test(address) ||
+    address.endsWith(".local")
+  );
+}
 
 export type RoomStatus = "idle" | "connecting" | "waiting" | "connected" | "failed" | "closed";
 
@@ -377,6 +393,44 @@ export class Room {
     return Math.max(16 * 1024, Math.min(max || FILE_CHUNK, FILE_CHUNK));
   }
 
+  /**
+   * How the connection to a peer actually travels, from the selected ICE
+   * candidate pair. Shown during a transfer so a slow one can be explained:
+   * two devices at home should say "same network"; "over the internet"
+   * between them means the router did not keep the traffic local.
+   */
+  async route(id: string): Promise<PeerRoute | undefined> {
+    const pc = this.peers.get(id)?.pc;
+    if (!pc) return undefined;
+    const stats = await pc.getStats();
+    type Pair = { localCandidateId?: string; remoteCandidateId?: string; currentRoundTripTime?: number; nominated?: boolean; state?: string };
+    type Candidate = { candidateType?: string; address?: string; protocol?: string };
+    let pair: Pair | undefined;
+    stats.forEach((s: { type: string; selectedCandidatePairId?: string }) => {
+      if (s.type === "transport" && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId) as Pair;
+    });
+    if (!pair) {
+      // Firefox and Safari do not expose the transport's selected pair.
+      stats.forEach((s: Pair & { type: string }) => {
+        if (!pair && s.type === "candidate-pair" && s.nominated && s.state === "succeeded") pair = s;
+      });
+    }
+    if (!pair) return undefined;
+    const local = stats.get(pair.localCandidateId ?? "") as Candidate | undefined;
+    const remote = stats.get(pair.remoteCandidateId ?? "") as Candidate | undefined;
+    const ends = [local, remote];
+    const kind: PeerRoute["kind"] = ends.some((c) => c?.candidateType === "relay")
+      ? "relay"
+      : ends.every((c) => c?.candidateType === "host" || isPrivateAddress(c?.address))
+        ? "local"
+        : "internet";
+    return {
+      kind,
+      tcp: local?.protocol === "tcp",
+      rtt: pair.currentRoundTripTime !== undefined ? pair.currentRoundTripTime * 1000 : undefined,
+    };
+  }
+
   isFileChannelOpen(id: string): boolean {
     return this.peers.get(id)?.file?.readyState === "open";
   }
@@ -398,8 +452,3 @@ export class Room {
     this.cb.onStatus("closed");
   }
 }
-
-export const connectionNote =
-  "homecast connects the two browsers directly. If a direct path cannot be found — " +
-  "some mobile networks and corporate firewalls — the connection fails rather than " +
-  "relaying your traffic through a server.";

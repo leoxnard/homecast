@@ -240,11 +240,13 @@ async function remember(): Promise<void> {
   chapters = record.chapters;
   await putEntry(record);
   // Peers only heard our identity at connect time; now there is a file to describe.
-  roomPanel.setMyFile(opened?.name, record.shareUrl);
   sync.announce();
   uploadedPath = relayPath(record.relayPath);
-  if (offerVideo) sender.offer(opened.file, record.duration, uploadedPath);
-  refreshSending();
+  // Sharing was for the previous video; a new one starts unshared.
+  if (sharedEntryId !== record.id) shareMode = "none";
+  sharedEntryId = record.id;
+  offerCurrent();
+  refreshShare();
 
   // Resume from whatever the store actually holds. Deciding it here rather than
   // in load() means it works the same however the file was opened.
@@ -335,7 +337,7 @@ const room = new Room({
   },
   onPeerReady: (id) => {
     sync.greet(id);
-    if (offerVideo && opened?.file.size) sender.offerTo(id);
+    sender.offerTo(id); // no-op unless the video is being shared
     toast("Someone joined the room");
   },
   onFileData: (from, data) => receiver.data(from, data),
@@ -354,20 +356,83 @@ const receiver = new FileReceiver(room);
 const transferCard = new TransferCard();
 document.body.append(transferCard.root);
 
-/** Host: whether people who join may download the video being played. */
-let offerVideo = false;
-/** Friend: arrived via a "get the video" link, so start without asking. */
-let autoGet = new URLSearchParams(location.search).get("get") === "1";
+/** Host: how the open video is being shared, if at all. */
+let shareMode: "none" | "direct" | "pingvin" = "none";
+let sharedEntryId: string | undefined;
+/** Friend: clicked "Download & watch together", so start as soon as an offer is here. */
+let wantVideo = false;
 /** Friend: the most recent offer, kept so an interrupted transfer can resume. */
 let pendingOffer: { from: string; offer: FileOffer } | undefined;
 /** Friend: jump onto the host's playhead once the received file has loaded. */
 let catchUpPending = false;
 
-sender.onProgress = () => refreshSending();
-sender.onFinished = () => refreshSending();
+/** How the bytes travel to/from the peer in a transfer, refreshed every few seconds. */
+let routeLabel = "";
+setInterval(() => {
+  const peer = receiver.current && receiver.busy ? receiver.current.from : sender.sendingTo[0];
+  if (!peer || peer === "relay") return void (routeLabel = "");
+  void room.route(peer).then((r) => {
+    if (!r) return void (routeLabel = "");
+    const where = { local: "same network", internet: "over the internet", relay: "via a relay" }[r.kind];
+    routeLabel = [where, r.tcp ? "TCP" : "", r.rtt !== undefined ? `${Math.round(r.rtt)} ms` : ""].filter(Boolean).join(" ");
+  });
+}, 2000);
 
-function refreshSending(): void {
-  roomPanel.setOffer(!!opened?.file.size, offerVideo, sender.sendingTo.length, offerVideo && !!uploadedPath);
+/** Host: bytes/second per friend being sent to, over the last few seconds. */
+const sendSpeed = new Map<string, Array<{ t: number; b: number }>>();
+sender.onProgress = (p) => {
+  const now = performance.now();
+  const samples = sendSpeed.get(p.peer) ?? [];
+  samples.push({ t: now, b: p.sent });
+  while (samples.length > 2 && now - (samples[0]?.t ?? now) > 5000) samples.shift();
+  sendSpeed.set(p.peer, samples);
+  refreshShare(p.sent / p.size, samples);
+};
+sender.onFinished = (peer) => {
+  sendSpeed.delete(peer);
+  refreshShare();
+};
+
+function shareLink(): string {
+  const q = new URLSearchParams({ get: "1" });
+  if (opened) {
+    q.set("n", opened.name);
+    q.set("s", String(opened.size));
+  }
+  if (shareMode === "pingvin" && uploadedPath) q.set("src", uploadedPath);
+  return `${location.origin}${ROOM_PATH}${room.roomCode}?${q}`;
+}
+
+/** (Re)announce the open file to the room with the current share mode. */
+function offerCurrent(): void {
+  const file = shareMode !== "none" && opened?.file.size ? opened.file : undefined;
+  const duration = Number.isFinite(video.duration) ? video.duration : undefined;
+  sender.offer(file, duration, shareMode === "pingvin" ? uploadedPath : undefined);
+}
+
+function refreshShare(progress?: number, samples?: Array<{ t: number; b: number }>): void {
+  roomPanel.setHasFile(!!opened?.file.size);
+  if (uploading) return; // the upload reports its own progress
+  if (shareMode === "none") return roomPanel.setShare({ phase: "idle" });
+  const link = shareLink();
+  if (shareMode === "pingvin") {
+    return roomPanel.setShare({ phase: "ready", label: "On Pingvin — works even when you're offline", link });
+  }
+  const sending = sender.sendingTo.length;
+  if (!sending) return roomPanel.setShare({ phase: "ready", label: "Keep this tab open while they download", link });
+  const first = samples?.[0];
+  const last = samples?.[samples.length - 1];
+  const dt = first && last ? (last.t - first.t) / 1000 : 0;
+  const speed = first && last && dt > 0.5 ? (last.b - first.b) / dt : 0;
+  const percent = progress !== undefined ? `${Math.floor(progress * 100)}%` : "";
+  roomPanel.setShare({
+    phase: "ready",
+    label: [`Sending${sending > 1 ? ` to ${sending}` : ""}`, percent, speed ? `${formatBytes(speed)}/s` : "", routeLabel]
+      .filter(Boolean)
+      .join(" · "),
+    progress: progress ?? 0,
+    link,
+  });
 }
 
 let pingvin: PingvinStatus = { enabled: false };
@@ -380,78 +445,73 @@ void pingvinStatus().then((status) => {
 let uploadedPath: string | undefined;
 let uploading: AbortController | undefined;
 
-async function uploadOpenVideo(): Promise<void> {
+async function shareViaPingvin(): Promise<void> {
   const file = opened?.file;
   if (!file?.size) return void toast("Open a video first", { warn: true });
   if (uploading) return;
+  if (uploadedPath) {
+    // Already on Pingvin from an earlier upload of this exact file.
+    shareMode = "pingvin";
+    offerCurrent();
+    return refreshShare();
+  }
   if (pingvin.maxSize && file.size > pingvin.maxSize) {
-    roomPanel.setUpload(
-      `This video is ${formatBytes(file.size)}, but Pingvin accepts ${formatBytes(pingvin.maxSize)} per share. ` +
-        `Raise "share.maxSize" in Pingvin's admin settings, or send it directly instead.`,
-      "warn",
-    );
-    return;
+    return roomPanel.setShare({
+      phase: "error",
+      label: `Too big for Pingvin (${formatBytes(file.size)}, limit ${formatBytes(pingvin.maxSize)})`,
+    });
   }
   let key = storedUploadKey();
   if (!key) {
-    key = window.prompt("Upload key (HOMECAST_UPLOAD_KEY, set on the server)")?.trim() || undefined;
+    key = window.prompt("Upload key (HOMECAST_UPLOAD_KEY on the server)")?.trim() || undefined;
     if (!key) return;
   }
 
   const abort = new AbortController();
   uploading = abort;
-  roomPanel.setUpload("Starting upload…", "busy", () => abort.abort());
+  roomPanel.setShare({ phase: "working", label: "Uploading…", progress: 0, onCancel: () => abort.abort() });
   try {
     const result = await uploadToPingvin(
       file,
       key,
       (p) => {
         const eta = p.bytesPerSecond > 0 ? formatEta((p.size - p.sent) / p.bytesPerSecond) : "";
-        roomPanel.setUpload(
-          `Uploading ${Math.floor((p.sent / p.size) * 100)}% · ${formatBytes(p.sent)} of ${formatBytes(p.size)}` +
-            (p.bytesPerSecond ? ` · ${formatBytes(p.bytesPerSecond)}/s` : "") +
-            (eta ? ` · ${eta}` : ""),
-          "busy",
-          () => abort.abort(),
-          p.sent / p.size,
-        );
+        roomPanel.setShare({
+          phase: "working",
+          label: [`Uploading ${Math.floor((p.sent / p.size) * 100)}%`, p.bytesPerSecond ? `${formatBytes(p.bytesPerSecond)}/s` : "", eta]
+            .filter(Boolean)
+            .join(" · "),
+          progress: p.sent / p.size,
+          onCancel: () => abort.abort(),
+        });
       },
       abort.signal,
     );
     storeUploadKey(key);
     uploadedPath = result.downloadPath;
-    offerVideo = true;
-    sender.offer(file, Number.isFinite(video.duration) ? video.duration : undefined, uploadedPath);
     if (entry) {
       const absolute = `${location.origin}${uploadedPath}`;
       entry = { ...entry, shareUrl: absolute, relayPath: uploadedPath };
       void patchEntry(entry.id, { shareUrl: absolute, relayPath: uploadedPath });
-      roomPanel.setMyFile(opened?.name, absolute);
     }
+    uploading = undefined;
+    shareMode = "pingvin";
+    offerCurrent();
     sync.announce();
-    roomPanel.setUpload("Uploaded — anyone with the link can download it, even while you're offline.", "done");
-    refreshSending();
+    refreshShare();
   } catch (err) {
+    uploading = undefined;
     const status = err instanceof UploadError ? err.status : 0;
     if (status === 401) storeUploadKey(undefined);
     const message = (err as Error).message;
-    roomPanel.setUpload(
-      message === "cancelled" ? "Upload cancelled." : status === 401 ? "That upload key was not accepted." : `Upload failed: ${message}`,
-      "warn",
+    roomPanel.setShare(
+      message === "cancelled"
+        ? { phase: "idle" }
+        : { phase: "error", label: status === 401 ? "Wrong upload key" : `Upload failed: ${message}` },
     );
   } finally {
-    uploading = undefined;
+    if (uploading === abort) uploading = undefined;
   }
-}
-
-function setOfferVideo(on: boolean): void {
-  offerVideo = on && !!opened?.file.size;
-  sender.offer(
-    offerVideo ? opened?.file : undefined,
-    Number.isFinite(video.duration) ? video.duration : undefined,
-    uploadedPath,
-  );
-  refreshSending();
 }
 
 const isOpen = (offer: FileOffer): boolean =>
@@ -478,25 +538,37 @@ async function onOffer(from: string, offer: FileOffer): Promise<void> {
   // Already downloaded earlier? Open that copy instead of fetching it again.
   const stored = await findInBrowserStorage(offer.name, offer.size);
   if (stored) {
-    transferCard.show({ title: `You already have ${offer.name}`, detail: "Opening it…", tone: "done" });
+    transferCard.show({ title: "You already have this video", detail: "Opening it…", tone: "done" });
     openReceived(stored, undefined);
     return;
   }
 
-  if (autoGet) {
-    void startReceive(false);
-    return;
-  }
+  if (wantVideo) void startReceive(false);
+  else showInvite(offer.name, offer.size);
+}
+
+/** The friendly first thing a friend sees: what was shared, and one button. */
+function showInvite(name?: string, size?: number): void {
   transferCard.show({
-    title: `The host is sharing ${offer.name}`,
-    detail:
-      `${formatBytes(offer.size)} · downloads to this device, then plays in sync` +
-      (url ? " · from the server, so the host can go offline" : ""),
-    actions: [
-      { label: "Download & watch", primary: true, run: () => void startReceive(true) },
-      ...(canSaveToDisk() ? [{ label: "Save as file…", run: () => void startReceive(true, "disk") }] : []),
-      { label: "Not now", run: () => transferCard.hide() },
-    ],
+    title: "A video was shared with you",
+    detail: name ? `${name}${size ? ` · ${formatBytes(size)}` : ""}` : "Download it, then watch it together in sync",
+    tone: "invite",
+    actions: [{ label: "Download & watch together", primary: true, run: acceptInvite }],
+  });
+}
+
+function acceptInvite(): void {
+  wantVideo = true;
+  if (pendingOffer) return void startReceive(true);
+  // Came in through the link before the host's browser has connected.
+  transferCard.show({
+    title: "Connecting to the host…",
+    detail: "The download starts by itself once they're here — their tab has to be open",
+    tone: "invite",
+    actions: [{ label: "Cancel", run: () => {
+      wantVideo = false;
+      showInvite(invite?.name, invite?.size);
+    } }],
   });
 }
 
@@ -565,7 +637,7 @@ async function receiveFromRelay(url: string, offer: FileOffer, sink: Sink): Prom
       url,
       offer.size,
       sink,
-      (p) => transferCard.progress(offer.name, p.received, p.size, p.bytesPerSecond, () => abort.abort()),
+      (p) => transferCard.progress(p.received, p.size, p.bytesPerSecond, () => abort.abort(), "from Pingvin"),
       abort.signal,
     );
     if (result.file.size !== offer.size) throw new Error(`saved file is ${result.file.size} bytes, expected ${offer.size}`);
@@ -583,15 +655,14 @@ async function receiveFromRelay(url: string, offer: FileOffer, sink: Sink): Prom
 }
 
 receiver.onState = (state: ReceiveState) => {
-  const name = pendingOffer?.offer.name ?? receiver.current?.offer.name ?? "the video";
   switch (state.phase) {
     case "receiving":
-      transferCard.progress(name, state.received, state.size, state.bytesPerSecond, () => receiver.cancel());
+      transferCard.progress(state.received, state.size, state.bytesPerSecond, () => receiver.cancel(), routeLabel);
       return;
     case "interrupted":
       transferCard.show({
-        title: state.reason === "cancelled" ? "Download paused" : `Download paused — ${state.reason}`,
-        detail: `${formatBytes(state.received)} of ${formatBytes(state.size)} kept on this device`,
+        title: "Download paused",
+        detail: `${state.reason === "cancelled" ? "" : `${state.reason} · `}${formatBytes(state.received)} of ${formatBytes(state.size)} kept`,
         progress: state.size ? state.received / state.size : 0,
         tone: "warn",
         actions: pendingOffer ? [{ label: "Resume", primary: true, run: () => void startReceive(true) }] : [],
@@ -606,14 +677,14 @@ receiver.onState = (state: ReceiveState) => {
       });
       return;
     case "done":
-      transferCard.show({ title: `${name} downloaded`, detail: "Opening and joining playback…", tone: "done" });
+      transferCard.show({ title: "Downloaded", detail: "Opening it and joining the others…", tone: "done" });
       openReceived(state.file, state.handle);
       return;
   }
 };
 
 function openReceived(file: File, handle: FileSystemFileHandle | undefined): void {
-  autoGet = false;
+  wantVideo = false;
   catchUpPending = true;
   void load({ name: file.name, size: file.size, url: URL.createObjectURL(file), file, handle });
   setTimeout(() => transferCard.hide(), 4000);
@@ -661,19 +732,13 @@ const roomPanel = new RoomPanel({
   },
   onResync: () => sync.resync(),
   onClose: closePanel,
-  onShareUrl: (raw) => void setShareUrl(raw),
-  onOfferVideo: (on) => setOfferVideo(on),
-  onCopyVideoLink: () => {
-    setOfferVideo(true);
-    const q = new URLSearchParams({ get: "1" });
-    if (uploadedPath && opened) {
-      q.set("src", uploadedPath);
-      q.set("n", opened.name);
-      q.set("s", String(opened.size));
-    }
-    return `${location.origin}${ROOM_PATH}${room.roomCode}?${q}`;
+  onShareDirect: () => {
+    shareMode = "direct";
+    offerCurrent();
+    refreshShare();
+    return shareLink();
   },
-  onUploadPingvin: () => void uploadOpenVideo(),
+  onSharePingvin: () => void shareViaPingvin(),
 });
 
 /** Save the download link for the open file and tell everyone in the room. */
@@ -683,7 +748,6 @@ async function setShareUrl(raw: string): Promise<void> {
   if (raw && !url) return void toast("That doesn't look like a web link", { warn: true });
   entry = { ...entry, shareUrl: url };
   await patchEntry(entry.id, { shareUrl: url });
-  roomPanel.setMyFile(opened?.name, url);
   sync.announce();
   toast(url ? "Download link shared with the room" : "Download link removed");
 }
@@ -703,7 +767,7 @@ function startRoom(code: string): void {
   roomPanel.setRoom(clean);
   roomPanel.setViewLocked(sync.viewLocked);
   history.replaceState(null, "", `${ROOM_PATH}${clean}`);
-  if (!opened) toast("Open your copy of the video — the file is never sent", { ms: 6000 });
+  if (!opened && !invite) toast("Open the video, or ask them to share it with you", { ms: 6000 });
 }
 
 function leaveRoom(): void {
@@ -717,8 +781,7 @@ function leaveRoom(): void {
 }
 
 function showRoom(): void {
-  roomPanel.setMyFile(opened?.name, entry?.shareUrl);
-  refreshSending();
+  refreshShare();
   showPanel(roomPanel.root);
 }
 
@@ -932,6 +995,12 @@ try {
 const roomFromUrl = location.pathname.startsWith(ROOM_PATH)
   ? location.pathname.slice(ROOM_PATH.length).toUpperCase()
   : "";
+const linkParams = new URLSearchParams(location.search);
+/** Opened a "watch this video with me" link rather than a plain room invite. */
+const invite: { name?: string; size?: number } | undefined =
+  roomFromUrl && linkParams.get("get") === "1"
+    ? { name: linkParams.get("n") ?? undefined, size: Number(linkParams.get("s")) || undefined }
+    : undefined;
 
 // Dev-only: `?src=/path.mp4` loads a file over HTTP without the native picker,
 // so the renderer can be driven from a test harness. Never built into production.
@@ -945,21 +1014,25 @@ if (devSrc) {
   );
 } else {
   void library.refresh().then(() => {
+    if (invite) return; // the invitation card is the page
     if (library.isEmpty) showStart();
     else library.setVisible(true);
   });
 }
 
 if (roomFromUrl) {
-  const params = new URLSearchParams(location.search);
-  const src = relayPath(params.get("src"));
-  const size = Number(params.get("s"));
-  const name = params.get("n");
   startRoom(roomFromUrl);
-  showRoom();
-  if (src && name && Number.isFinite(size) && size > 0) {
-    // The host may be offline; the uploaded copy is enough to start downloading.
-    void onOffer("relay", { type: "file-offer", name, size, lastModified: 0, url: src });
+  if (!invite) showRoom();
+  const src = relayPath(linkParams.get("src"));
+  if (invite?.name && invite.size) {
+    if (src) {
+      // Uploaded to Pingvin: the host may be offline, the link alone is enough.
+      void onOffer("relay", { type: "file-offer", name: invite.name, size: invite.size, lastModified: 0, url: src });
+    } else {
+      showInvite(invite.name, invite.size);
+    }
+  } else if (invite) {
+    showInvite();
   }
 }
 

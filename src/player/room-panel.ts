@@ -1,7 +1,6 @@
-/** Watch-together UI: room code, peers, view lock, resync (PLAN §4.3, M5). */
-import { ROOM_PATH, safeHttpUrl } from "../shared/protocol.ts";
+/** Watch-together panel: room code, who is here, and sharing the video. */
+import { ROOM_PATH } from "../shared/protocol.ts";
 import type { PeerInfo, RoomStatus } from "./room.ts";
-import { connectionNote } from "./room.ts";
 
 export interface RoomPanelCallbacks {
   onHost: () => void;
@@ -10,14 +9,19 @@ export interface RoomPanelCallbacks {
   onToggleViewLock: (locked: boolean) => void;
   onResync: () => void;
   onClose: () => void;
-  /** save (or clear, with "") the download link for the file you have open */
-  onShareUrl: (url: string) => void;
-  /** let people who join download the playing video straight from this browser */
-  onOfferVideo: (on: boolean) => void;
-  /** turn offering on and return the room link that downloads automatically */
-  onCopyVideoLink: () => string;
-  /** upload the open video to Pingvin through the server relay */
-  onUploadPingvin: () => void;
+  /** start offering the video from this browser; returns the link to send */
+  onShareDirect: () => string;
+  /** upload to Pingvin; progress arrives through setShare */
+  onSharePingvin: () => void;
+}
+
+export interface ShareState {
+  phase: "idle" | "working" | "ready" | "error";
+  /** one short line: "Uploading 34%", "Link ready", "Sending · 34%" */
+  label?: string;
+  progress?: number;
+  link?: string;
+  onCancel?: () => void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -31,31 +35,42 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   return node;
 };
 
+async function copy(text: string, input?: HTMLInputElement): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    if (input) {
+      input.value = text;
+      input.select();
+    }
+    return false;
+  }
+}
+
 export class RoomPanel {
   readonly root: HTMLElement;
   private readonly cb: RoomPanelCallbacks;
   private readonly idle: HTMLElement;
   private readonly active: HTMLElement;
   private readonly codeEl: HTMLElement;
-  private readonly linkEl: HTMLInputElement;
   private readonly statusEl: HTMLElement;
   private readonly peerList: HTMLElement;
   private readonly lockToggle: HTMLInputElement;
   private readonly codeInput: HTMLInputElement;
-  private readonly shareInput: HTMLInputElement;
-  private readonly shareSave: HTMLButtonElement;
+  private code = "";
+
+  private readonly shareBox: HTMLElement;
+  private readonly pingvinBtn: HTMLButtonElement;
+  private readonly directBtn: HTMLButtonElement;
   private readonly shareLabel: HTMLElement;
-  private readonly getFile: HTMLElement;
-  private readonly sendBox: HTMLElement;
-  private readonly offerToggle: HTMLInputElement;
-  private readonly offerStatus: HTMLElement;
-  private readonly copyVideoLink: HTMLButtonElement;
-  private readonly uploadBtn: HTMLButtonElement;
-  private readonly uploadStatus: HTMLElement;
-  private readonly uploadBar: HTMLElement;
-  private readonly uploadFill: HTMLElement;
-  private readonly uploadCancel: HTMLButtonElement;
-  private cancelUpload?: () => void;
+  private readonly shareBar: HTMLElement;
+  private readonly shareFill: HTMLElement;
+  private readonly shareCancel: HTMLButtonElement;
+  private readonly linkRow: HTMLElement;
+  private readonly linkInput: HTMLInputElement;
+  private readonly linkCopy: HTMLButtonElement;
+  private cancel?: () => void;
 
   constructor(cb: RoomPanelCallbacks) {
     this.cb = cb;
@@ -63,22 +78,14 @@ export class RoomPanel {
 
     const header = el("div", "chapters-header");
     header.append(el("h1", undefined, "Watch together"));
-    const spacer = el("div", "spacer");
     const close = el("button", "btn", "Close");
     close.addEventListener("click", () => this.cb.onClose());
-    header.append(spacer, close);
+    header.append(el("div", "spacer"), close);
 
-    // --- idle: host or join -------------------------------------------------
-    this.idle = el("div");
-    this.idle.append(
-      el("p", "dim-text",
-        "Both of you open your own copy of the same file. Only the playhead and " +
-        "view direction are shared — the video never leaves either machine."),
-    );
-
-    const hostBtn = el("button", "btn", "Start a room");
+    // --- not in a room -------------------------------------------------------
+    this.idle = el("div", "room-idle");
+    const hostBtn = el("button", "btn primary-small", "Start a room");
     hostBtn.addEventListener("click", () => this.cb.onHost());
-
     this.codeInput = el("input", "code-input");
     this.codeInput.placeholder = "code";
     this.codeInput.maxLength = 7;
@@ -94,252 +101,150 @@ export class RoomPanel {
       if (e.key === "Enter") doJoin();
       e.stopPropagation(); // typing a code must not trigger player shortcuts
     });
-
     const row = el("div", "room-actions");
     row.append(hostBtn, el("span", "dim-text", "or"), this.codeInput, joinBtn);
     this.idle.append(row);
 
-    // --- active: connected --------------------------------------------------
+    // --- in a room -----------------------------------------------------------
     this.active = el("div");
     this.active.hidden = true;
 
+    const codeRow = el("div", "room-code-row");
     this.codeEl = el("div", "room-code", "-----");
-    const codeWrap = el("div", "room-code-wrap");
-    codeWrap.append(el("div", "dim-text", "Room code"), this.codeEl);
-
-    this.linkEl = el("input", "room-link");
-    this.linkEl.readOnly = true;
-    const copy = el("button", "btn", "Copy link");
-    copy.addEventListener("click", () => {
-      this.linkEl.select();
-      void navigator.clipboard?.writeText(this.linkEl.value).catch(() => document.execCommand("copy"));
-      copy.textContent = "Copied";
-      setTimeout(() => (copy.textContent = "Copy link"), 1600);
+    const invite = el("button", "btn", "Copy invite");
+    invite.addEventListener("click", () => {
+      void copy(`${location.origin}${ROOM_PATH}${this.code}`).then((ok) => flash(invite, ok ? "Copied" : "Copy failed"));
     });
-    const linkRow = el("div", "room-actions");
-    linkRow.append(this.linkEl, copy);
-
+    codeRow.append(this.codeEl, invite);
     this.statusEl = el("div", "room-status");
     this.peerList = el("div", "peer-list");
+
+    // Share the video: two buttons, one progress line, one link.
+    this.shareBox = el("div", "share-video");
+    this.shareBox.hidden = true;
+    const shareTitle = el("div", "share-title", "Share the video");
+    const buttons = el("div", "share-buttons");
+    this.pingvinBtn = el("button", "btn share-btn", "Pingvin");
+    this.pingvinBtn.hidden = true;
+    this.pingvinBtn.addEventListener("click", () => this.cb.onSharePingvin());
+    this.directBtn = el("button", "btn share-btn", "From this browser");
+    this.directBtn.addEventListener("click", () => {
+      const link = this.cb.onShareDirect();
+      this.setShare({ phase: "ready", label: "Keep this tab open while they download", link });
+      void copy(link, this.linkInput).then((ok) => ok && flash(this.linkCopy, "Copied"));
+    });
+    buttons.append(this.pingvinBtn, this.directBtn);
+
+    this.shareLabel = el("div", "share-label");
+    this.shareBar = el("div", "transfer-bar");
+    this.shareFill = el("div", "transfer-fill");
+    this.shareBar.append(this.shareFill);
+    this.shareCancel = el("button", "btn ghost", "Cancel");
+    this.shareCancel.addEventListener("click", () => this.cancel?.());
+    const progressRow = el("div", "share-progress");
+    progressRow.append(this.shareBar, this.shareCancel);
+
+    this.linkRow = el("div", "room-actions");
+    this.linkInput = el("input", "room-link");
+    this.linkInput.readOnly = true;
+    this.linkCopy = el("button", "btn", "Copy link");
+    this.linkCopy.addEventListener("click", () => {
+      void copy(this.linkInput.value, this.linkInput).then((ok) => ok && flash(this.linkCopy, "Copied"));
+    });
+    this.linkRow.append(this.linkInput, this.linkCopy);
+
+    this.shareBox.append(shareTitle, buttons, this.shareLabel, progressRow, this.linkRow);
+    this.setShare({ phase: "idle" });
 
     const lockLabel = el("label", "toggle");
     this.lockToggle = el("input");
     this.lockToggle.type = "checkbox";
     this.lockToggle.checked = true;
     this.lockToggle.addEventListener("change", () => this.cb.onToggleViewLock(this.lockToggle.checked));
-    lockLabel.append(this.lockToggle, el("span", undefined, "Lock view to theirs"));
-
-    const resync = el("button", "btn", "Resync to me");
-    resync.title = "Force everyone onto your playhead";
+    lockLabel.append(this.lockToggle, el("span", undefined, "Follow their view"));
+    const resync = el("button", "btn", "Resync");
+    resync.title = "Put everyone on your playhead";
     resync.addEventListener("click", () => this.cb.onResync());
-    const leave = el("button", "btn danger", "Leave room");
+    const leave = el("button", "btn danger", "Leave");
     leave.addEventListener("click", () => this.cb.onLeave());
-
-    const controls = el("div", "room-actions");
+    const controls = el("div", "room-actions room-controls");
     controls.append(lockLabel, el("div", "spacer"), resync, leave);
 
-    // --- send the video directly ------------------------------------------
-    this.sendBox = el("div", "send-box");
-    const sendTitle = el("div", "send-title", "Send them the video");
-    this.copyVideoLink = el("button", "btn primary-small", "Copy link with video");
-    this.copyVideoLink.title = "Whoever opens it downloads the video from you, then joins in sync";
-    this.copyVideoLink.addEventListener("click", () => {
-      const url = this.cb.onCopyVideoLink();
-      this.offerToggle.checked = true;
-      const done = () => {
-        this.copyVideoLink.textContent = "Copied";
-        setTimeout(() => (this.copyVideoLink.textContent = "Copy link with video"), 1600);
-      };
-      void navigator.clipboard?.writeText(url).then(done, () => {
-        this.linkEl.value = url;
-        this.linkEl.select();
-      });
-    });
-    const offerLabel = el("label", "toggle");
-    this.offerToggle = el("input");
-    this.offerToggle.type = "checkbox";
-    this.offerToggle.addEventListener("change", () => this.cb.onOfferVideo(this.offerToggle.checked));
-    offerLabel.append(this.offerToggle, el("span", undefined, "Let anyone in this room download it from me"));
-    this.offerStatus = el("div", "dim-text small");
-    const sendRow = el("div", "room-actions");
-    sendRow.append(this.copyVideoLink, offerLabel);
-
-    // Pingvin: shown only when the server has it configured.
-    this.uploadBtn = el("button", "btn", "Upload to Pingvin");
-    this.uploadBtn.title = "Upload once, so people can download it even while you're offline";
-    this.uploadBtn.hidden = true;
-    this.uploadBtn.addEventListener("click", () => this.cb.onUploadPingvin());
-    this.uploadCancel = el("button", "btn ghost", "Cancel");
-    this.uploadCancel.hidden = true;
-    this.uploadCancel.addEventListener("click", () => this.cancelUpload?.());
-    this.uploadStatus = el("div", "dim-text small");
-    this.uploadBar = el("div", "transfer-bar");
-    this.uploadFill = el("div", "transfer-fill");
-    this.uploadBar.append(this.uploadFill);
-    this.uploadBar.hidden = true;
-    const uploadRow = el("div", "room-actions");
-    uploadRow.append(this.uploadBtn, this.uploadCancel);
-
-    this.sendBox.append(sendTitle, sendRow, this.offerStatus, uploadRow, this.uploadBar, this.uploadStatus);
-
-    // --- where to get the file ------------------------------------------
-    this.getFile = el("div", "get-file");
-    this.getFile.hidden = true;
-
-    const share = el("div", "share-box");
-    this.shareLabel = el("div", "dim-text", "Download link for your file");
-    this.shareInput = el("input", "room-link share-input");
-    this.shareInput.type = "url";
-    this.shareInput.placeholder = "https://share… (Pingvin, Google Drive, …)";
-    this.shareInput.spellcheck = false;
-    this.shareInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") this.saveShare();
-      e.stopPropagation();
-    });
-    this.shareSave = el("button", "btn", "Share link");
-    this.shareSave.addEventListener("click", () => this.saveShare());
-    const shareRow = el("div", "room-actions");
-    shareRow.append(this.shareInput, this.shareSave);
-    share.append(
-      this.shareLabel,
-      shareRow,
-      el("p", "dim-text small",
-        "Only the link is sent to the others in the room. The video itself never goes through homecast."),
-    );
-
-    this.active.append(codeWrap, linkRow, this.statusEl, this.getFile, this.peerList, this.sendBox, share, controls);
-
-    const note = el("p", "dim-text", connectionNote);
-    this.root.append(header, this.idle, this.active, note);
-  }
-
-  private saveShare(): void {
-    const raw = this.shareInput.value.trim();
-    if (raw && !safeHttpUrl(raw)) {
-      this.shareInput.classList.add("invalid");
-      return;
-    }
-    this.shareInput.classList.remove("invalid");
-    this.cb.onShareUrl(raw);
-  }
-
-  /** Reflect the file you have open and its saved link. */
-  setMyFile(name: string | undefined, shareUrl: string | undefined): void {
-    const hasFile = !!name;
-    this.shareInput.disabled = !hasFile;
-    this.shareSave.disabled = !hasFile;
-    this.shareLabel.textContent = hasFile ? `Download link for ${name}` : "Open a video to share a download link for it";
-    if (document.activeElement !== this.shareInput) this.shareInput.value = shareUrl ?? "";
-    this.shareSave.textContent = shareUrl ? "Update link" : "Share link";
-    this.hasOwnFile = hasFile;
-  }
-
-  private hasOwnFile = false;
-
-  setPingvin(enabled: boolean): void {
-    this.uploadBtn.hidden = !enabled;
-  }
-
-  setUpload(message: string, state: "busy" | "done" | "warn", cancel?: () => void, progress?: number): void {
-    this.uploadStatus.textContent = message;
-    this.uploadStatus.className = `dim-text small${state === "warn" ? " warn-text" : ""}`;
-    this.cancelUpload = cancel;
-    this.uploadCancel.hidden = state !== "busy" || !cancel;
-    this.uploadBtn.disabled = state === "busy";
-    this.uploadBtn.textContent = state === "done" ? "Uploaded ✓" : "Upload to Pingvin";
-    this.uploadBar.hidden = progress === undefined;
-    if (progress !== undefined) this.uploadFill.style.width = `${Math.min(1, Math.max(0, progress)) * 100}%`;
-  }
-
-  /** Host controls for sending the playing video directly to people who join. */
-  setOffer(hasFile: boolean, on: boolean, sendingCount: number, uploaded = false): void {
-    this.sendBox.hidden = !hasFile;
-    this.offerToggle.checked = on;
-    this.offerStatus.textContent = uploaded
-      ? "Offered to everyone who joins. They download it from Pingvin, so you can close this tab."
-      : !on
-        ? "Sent straight from this browser to theirs — keep this tab open until they have it."
-        : sendingCount
-          ? `Sending to ${sendingCount} ${sendingCount === 1 ? "person" : "people"} — keep this tab open.`
-          : "Offered to everyone who joins. Keep this tab open while they download.";
+    this.active.append(codeRow, this.statusEl, this.peerList, this.shareBox, controls);
+    this.root.append(header, this.idle, this.active);
   }
 
   setRoom(code: string): void {
+    this.code = code;
     this.idle.hidden = true;
     this.active.hidden = false;
     this.codeEl.textContent = code;
-    this.linkEl.value = `${location.origin}${ROOM_PATH}${code}`;
   }
 
   setIdle(): void {
     this.idle.hidden = false;
     this.active.hidden = true;
+    this.setShare({ phase: "idle" });
   }
 
   setStatus(status: RoomStatus, detail?: string): void {
     const text: Record<RoomStatus, string> = {
       idle: "",
       connecting: "Connecting…",
-      waiting: "Waiting for someone to join — send them the link",
+      waiting: "Waiting for someone to join",
       connected: "Connected",
       failed: detail ?? "Connection failed",
       closed: "",
     };
-    this.statusEl.textContent = detail && status !== "failed" ? `${text[status]} · ${detail}` : text[status];
+    this.statusEl.textContent = text[status];
     this.statusEl.className = `room-status ${status}`;
   }
 
   setPeers(peers: PeerInfo[]): void {
-    this.peerList.replaceChildren();
-
-    // Arrived without the file? Put the way to get it front and centre.
-    const withLink = peers.find((p) => p.shareUrl);
-    this.getFile.replaceChildren();
-    this.getFile.hidden = this.hasOwnFile || !withLink;
-    if (withLink?.shareUrl && !this.hasOwnFile) {
-      this.getFile.append(
-        el("div", undefined, withLink.file ? `They're watching ${withLink.file}` : "They shared the video"),
-        downloadLink(withLink.shareUrl, "Download it"),
-        el("div", "dim-text small", "Then open it here — playback syncs once it's loaded."),
-      );
-    }
-
-    for (const peer of peers) {
-      const row = el("div", "peer-row");
-      row.append(el("span", "peer-dot " + peer.connectionState));
-      row.append(el("span", "peer-name", peer.file ?? peer.name ?? peer.id));
-      if (peer.shareUrl) row.append(downloadLink(peer.shareUrl, "download"));
-      const meta: string[] = [peer.connectionState];
-      if (peer.rtt !== undefined) meta.push(`${Math.round(peer.rtt)} ms`);
-      row.append(el("span", "peer-meta", meta.join(" · ")));
-      this.peerList.append(row);
-    }
+    this.peerList.replaceChildren(
+      ...peers.map((peer) => {
+        const row = el("div", "peer-row");
+        row.append(el("span", "peer-dot " + peer.connectionState));
+        row.append(el("span", "peer-name", peer.file ?? "Viewer"));
+        if (peer.rtt !== undefined) row.append(el("span", "peer-meta", `${Math.round(peer.rtt)} ms`));
+        return row;
+      }),
+    );
   }
 
   setViewLocked(locked: boolean): void {
     this.lockToggle.checked = locked;
   }
+
+  /** The share section only makes sense with a video open. */
+  setHasFile(hasFile: boolean): void {
+    this.shareBox.hidden = !hasFile;
+  }
+
+  setPingvin(enabled: boolean): void {
+    this.pingvinBtn.hidden = !enabled;
+  }
+
+  setShare(state: ShareState): void {
+    const working = state.phase === "working";
+    this.pingvinBtn.disabled = working;
+    this.directBtn.disabled = working;
+    this.shareLabel.textContent = state.label ?? "";
+    this.shareLabel.hidden = !state.label;
+    this.shareLabel.classList.toggle("warn-text", state.phase === "error");
+    this.shareBar.hidden = state.progress === undefined;
+    this.shareFill.style.width = `${Math.min(1, Math.max(0, state.progress ?? 0)) * 100}%`;
+    this.cancel = state.onCancel;
+    this.shareCancel.hidden = !state.onCancel;
+    this.shareCancel.parentElement!.hidden = state.progress === undefined && !state.onCancel;
+    this.linkRow.hidden = !state.link;
+    if (state.link) this.linkInput.value = state.link;
+  }
 }
 
-/**
- * A link a *peer* sent. It is revalidated here even though the room already
- * did, opens in a new tab, and passes no referrer or window handle back.
- */
-function downloadLink(raw: string, label: string): HTMLElement {
-  const href = safeHttpUrl(raw);
-  if (!href) return document.createElement("span");
-  const a = document.createElement("a");
-  a.className = "download-link";
-  a.href = href;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  let host = "";
-  try {
-    host = new URL(href).host;
-  } catch {
-    /* validated above */
-  }
-  a.textContent = host ? `${label} (${host})` : label;
-  a.title = href;
-  return a;
+function flash(button: HTMLButtonElement, text: string): void {
+  const original = button.dataset.label ?? button.textContent ?? "";
+  button.dataset.label = original;
+  button.textContent = text;
+  setTimeout(() => (button.textContent = original), 1500);
 }

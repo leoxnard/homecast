@@ -28,6 +28,13 @@ const identity = (f: FileIdentity): FileIdentity => ({
 /** Read the file in large slices, send in channel-sized chunks. */
 const READ_SLICE = 8 * 1024 * 1024;
 
+/**
+ * Received chunks are written in batches of this size. A 64 KiB write is an
+ * IPC round trip to the file system (and a swap-file append in Chrome), so
+ * one write per chunk makes the disk, not the network, the bottleneck.
+ */
+const WRITE_BATCH = 4 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Host side
 // ---------------------------------------------------------------------------
@@ -56,18 +63,17 @@ export class FileSender {
     return this.file;
   }
 
-  /** Start (or stop, with undefined) offering a file to everyone in the room. */
-  /** Relay download path once the file has been uploaded to Pingvin. */
+  /** Relay download path when the file is on Pingvin; friends then fetch it from there. */
   private url?: string;
 
+  /** Start (or stop, with undefined) offering a file to everyone in the room. */
   offer(file: File | undefined, duration?: number, url?: string): void {
     if (this.file && (!file || !sameFile(this.file, file))) {
       for (const peer of [...this.active.keys()]) this.cancel(peer, true);
-      this.url = undefined;
     }
     this.file = file;
     this.duration = duration;
-    if (url !== undefined) this.url = url;
+    this.url = url;
     if (file) this.room.broadcastControl(this.offerMessage(file));
   }
 
@@ -150,6 +156,8 @@ export class FileReceiver {
   private received = 0;
   /** writes are chained so chunks hit the disk strictly in order */
   private writing: Promise<void> = Promise.resolve();
+  private batch: ArrayBuffer[] = [];
+  private batchBytes = 0;
   private failed = false;
   private finishing = false;
   private stallTimer?: number;
@@ -178,6 +186,8 @@ export class FileReceiver {
     this.finishing = false;
     this.armStallTimer();
     this.writing = Promise.resolve();
+    this.batch = [];
+    this.batchBytes = 0;
     this.speedSamples = [{ t: performance.now(), bytes: this.received }];
     this.room.sendTo(from, { type: "file-request", ...identity(offer), offset: this.received });
     this.emitProgress();
@@ -192,12 +202,29 @@ export class FileReceiver {
     if (room <= 0) return;
     const bytes = chunk.byteLength > room ? chunk.slice(0, room) : chunk;
     this.received += bytes.byteLength;
-    this.writing = this.writing.then(() => sink.write(bytes)).catch((err: unknown) => {
-      this.fail(`could not write to disk: ${(err as Error).message}`);
-    });
+    this.batch.push(bytes);
+    this.batchBytes += bytes.byteLength;
+    if (this.batchBytes >= WRITE_BATCH) this.flush();
     this.armStallTimer();
     this.sampleSpeed();
     if (this.received === offer.size) void this.finish();
+  }
+
+  /** Queue everything buffered so far as one write. */
+  private flush(): void {
+    const sink = this.sink;
+    if (!sink || this.batchBytes === 0) return;
+    const joined = new Uint8Array(this.batchBytes);
+    let at = 0;
+    for (const part of this.batch) {
+      joined.set(new Uint8Array(part), at);
+      at += part.byteLength;
+    }
+    this.batch = [];
+    this.batchBytes = 0;
+    this.writing = this.writing.then(() => sink.write(joined.buffer)).catch((err: unknown) => {
+      this.fail(`could not write to disk: ${(err as Error).message}`);
+    });
   }
 
   /**
@@ -228,6 +255,7 @@ export class FileReceiver {
     const offer = this.offer;
     if (!sink || !offer || this.finishing) return;
     if (this.stallTimer) clearTimeout(this.stallTimer);
+    this.flush(); // keep every byte that arrived, so a resume starts after it
     await this.writing;
     await sink.abort();
     this.sink = undefined;
@@ -245,6 +273,7 @@ export class FileReceiver {
     if (!sink || !offer || this.finishing || this.received !== offer.size) return;
     this.finishing = true;
     if (this.stallTimer) clearTimeout(this.stallTimer);
+    this.flush();
     await this.writing;
     if (this.failed) return;
     try {

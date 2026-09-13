@@ -146,6 +146,8 @@ export async function uploadToPingvin(
   return { shareId, fileId, downloadPath: `/api/pingvin/download/${shareId}/${fileId}` };
 }
 
+const WRITE_BATCH = 4 * 1024 * 1024;
+
 export interface DownloadProgress {
   received: number;
   size: number;
@@ -179,11 +181,28 @@ export async function downloadFromRelay(
   const samples: Array<{ t: number; b: number }> = [{ t: performance.now(), b: received }];
   let lastEmit = 0;
   const reader = res.body.getReader();
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  const flush = async () => {
+    if (!pendingBytes) return;
+    const joined = new Uint8Array(pendingBytes);
+    let at = 0;
+    for (const part of pending) {
+      joined.set(part, at);
+      at += part.byteLength;
+    }
+    pending = [];
+    pendingBytes = 0;
+    await sink.write(joined.buffer);
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      await sink.write(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+      // Batch small network reads into few large disk writes (see p2p WRITE_BATCH).
+      pending.push(value);
+      pendingBytes += value.byteLength;
+      if (pendingBytes >= WRITE_BATCH) await flush();
       received += value.byteLength;
       const now = performance.now();
       samples.push({ t: now, b: received });
@@ -195,7 +214,9 @@ export async function downloadFromRelay(
         onProgress({ received, size, bytesPerSecond: first && dt > 0.5 ? (received - first.b) / dt : 0 });
       }
     }
+    await flush();
   } catch (err) {
+    await flush().catch(() => {});
     await sink.abort();
     throw Object.assign(new Error((err as Error).name === "AbortError" ? "cancelled" : "connection lost"), { received });
   }

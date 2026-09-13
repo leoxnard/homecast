@@ -56,7 +56,7 @@ export class TransferCard {
     title: string;
     detail?: string;
     progress?: number;
-    tone?: "normal" | "warn" | "done";
+    tone?: "normal" | "warn" | "done" | "invite";
     actions?: CardAction[];
   }): void {
     this.root.hidden = false;
@@ -74,12 +74,14 @@ export class TransferCard {
     );
   }
 
-  progress(name: string, received: number, size: number, bytesPerSecond: number, onCancel: () => void): void {
+  /** `route` says how the bytes travel ("same network", "over the internet"). */
+  progress(received: number, size: number, bytesPerSecond: number, onCancel: () => void, route?: string): void {
     const eta = bytesPerSecond > 0 ? formatEta((size - received) / bytesPerSecond) : "";
+    const percent = size ? Math.floor((received / size) * 100) : 0;
     const speed = bytesPerSecond > 0 ? `${formatBytes(bytesPerSecond)}/s` : "starting…";
     this.show({
-      title: `Getting ${name}`,
-      detail: `${formatBytes(received)} of ${formatBytes(size)} · ${speed}${eta ? ` · ${eta}` : ""}`,
+      title: `Downloading · ${percent}%`,
+      detail: [`${formatBytes(received)} of ${formatBytes(size)}`, speed, eta, route].filter(Boolean).join(" · "),
       progress: size ? received / size : 0,
       actions: [{ label: "Cancel", run: onCancel }],
     });
