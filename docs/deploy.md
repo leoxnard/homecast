@@ -94,19 +94,22 @@ skips the already-received bytes on the server side.
 Watch-together connects the browsers directly. That fails when a device is on
 mobile data or behind a strict router or firewall, and the room shows "Your
 networks can't connect directly". A TURN relay fixes this. It is off by default,
-because relayed traffic (a video sent "From this browser", too) goes through the
-relay.
+because relayed traffic goes through the relay and counts against its quota.
+
+homecast only uses the relay to keep playback in sync, a few KB per viewer.
+It never sends a video through it: when two devices are only connected via the
+relay, "From this browser" refuses and the friend is told to use Pingvin. So
+Cloudflare's 1,000 GB/month free tier is effectively out of reach.
 
 - **Cloudflare Realtime TURN** (no ports to open, works behind the tunnel):
   create a TURN key under *Realtime → TURN Server* in the Cloudflare dashboard,
-  then set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`. Check
-  Cloudflare's current pricing for relayed data.
+  then set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`.
 - **Your own coturn** (needs UDP 3478 and a relay port range reachable from the
   internet, so it can't sit behind a Cloudflare tunnel): run it with
   `use-auth-secret`, then set `TURN_URLS` (comma-separated) and `TURN_SECRET`.
 
 The server mints credentials that expire after 6 hours, at `/api/ice`. A
-transfer that goes through the relay says "via a relay" next to its speed.
+peer connection that uses it shows "via a relay".
 
 ### Health
 

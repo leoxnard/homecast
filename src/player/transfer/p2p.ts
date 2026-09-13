@@ -54,6 +54,8 @@ export class FileSender {
   private nextToken = 1;
   onProgress?: (p: SendProgress) => void;
   onFinished?: (peer: string) => void;
+  /** Checked before serving a peer; false refuses (e.g. the path is a paid relay). */
+  canSend?: (peer: string) => Promise<boolean>;
 
   constructor(room: Room) {
     this.room = room;
@@ -95,6 +97,10 @@ export class FileSender {
     const file = this.file;
     // Only ever the file on offer — a peer cannot ask for anything else.
     if (!file || !sameFile(file, wanted)) {
+      this.room.sendTo(peer, { type: "file-cancel", ...identity(wanted) });
+      return;
+    }
+    if (this.canSend && !(await this.canSend(peer))) {
       this.room.sendTo(peer, { type: "file-cancel", ...identity(wanted) });
       return;
     }
