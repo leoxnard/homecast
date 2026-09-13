@@ -12,13 +12,27 @@
 import { safeHttpUrl, type ServerSignal, type SyncMessage } from "../shared/protocol.ts";
 
 /**
- * STUN only. A direct path works for the common case of two home connections;
- * symmetric NAT or strict corporate firewalls would need a TURN relay, which
- * would mean routing peer traffic through a server.
+ * STUN finds a direct path for the common case of two home connections.
+ * Symmetric NAT (most mobile data) or a UDP-blocking firewall needs a TURN
+ * relay, which the server hands out from /api/ice only when one is configured.
  */
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+const FALLBACK_ICE: RTCIceServer[] = [
+  { urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] },
 ];
+
+let iceConfig: Promise<{ iceServers: RTCIceServer[]; turn: boolean }> | undefined;
+let iceFetchedAt = 0;
+/** TURN credentials expire (server TTL 6 h), so refetch well before that. */
+function loadIce(): Promise<{ iceServers: RTCIceServer[]; turn: boolean }> {
+  if (!iceConfig || Date.now() - iceFetchedAt > 60 * 60 * 1000) {
+    iceFetchedAt = Date.now();
+    iceConfig = fetch("/api/ice", { cache: "no-store" })
+      .then((r) => r.json() as Promise<{ iceServers?: RTCIceServer[]; turn?: boolean }>)
+      .then((b) => ({ iceServers: b.iceServers?.length ? b.iceServers : FALLBACK_ICE, turn: !!b.turn }))
+      .catch(() => ({ iceServers: FALLBACK_ICE, turn: false }));
+  }
+  return iceConfig;
+}
 
 /**
  * 64 KiB: within every browser's SCTP message limit. Measured Chrome → Chrome:
@@ -83,6 +97,11 @@ interface PeerLink {
   initiator: boolean;
   /** onPeerReady fires once per peer, not once per channel that opens */
   readyNotified: boolean;
+  /** ICE restarts tried since the connection last worked */
+  restarts: number;
+  disconnectTimer?: number;
+  /** candidates that arrived before the remote description, applied right after it */
+  pendingCandidates: RTCIceCandidateInit[];
 }
 
 export class Room {
@@ -94,6 +113,7 @@ export class Room {
   private closing = false;
   private reconnectAttempts = 0;
   private reconnectTimer?: number;
+  private signalQueue: Promise<void> = Promise.resolve();
 
   constructor(cb: RoomCallbacks) {
     this.cb = cb;
@@ -141,7 +161,9 @@ export class Room {
       } catch {
         return;
       }
-      void this.handleSignal(message);
+      // Strictly in order: an ICE candidate handled before the offer it belongs
+      // to is rejected, and a dropped candidate can be the only working path.
+      this.signalQueue = this.signalQueue.then(() => this.handleSignal(message)).catch(() => {});
     });
 
     ws.addEventListener("close", () => {
@@ -210,13 +232,18 @@ export class Room {
     const existing = this.peers.get(id);
     if (existing) return existing;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const ice = await loadIce();
+    const again = this.peers.get(id); // a signal may have created it while we waited
+    if (again) return again;
+    const pc = new RTCPeerConnection({ iceServers: ice.iceServers });
     const link: PeerLink = {
       id,
       pc,
       initiator,
       info: { id, connectionState: pc.connectionState },
       readyNotified: false,
+      restarts: 0,
+      pendingCandidates: [],
     };
     this.peers.set(id, link);
 
@@ -226,10 +253,16 @@ export class Room {
 
     pc.addEventListener("connectionstatechange", () => {
       link.info.connectionState = pc.connectionState;
-      if (pc.connectionState === "failed") {
-        this.cb.onStatus("failed", "direct connection failed — see the note about strict NATs");
-      } else if (pc.connectionState === "connected") {
+      if (link.disconnectTimer) clearTimeout(link.disconnectTimer);
+      if (pc.connectionState === "connected") {
+        link.restarts = 0;
         this.cb.onStatus("connected");
+      } else if (pc.connectionState === "disconnected") {
+        // Often a network switch (Wi-Fi → mobile); give it a moment, then renegotiate.
+        link.disconnectTimer = window.setTimeout(() => void this.restartIce(link), 4000);
+      } else if (pc.connectionState === "failed") {
+        if (link.restarts < 2) void this.restartIce(link);
+        else void this.explainFailure(link).then((why) => this.cb.onStatus("failed", why));
       }
       this.emitPeers();
     });
@@ -290,30 +323,79 @@ export class Room {
     channel.addEventListener("close", () => this.emitPeers());
   }
 
+  /**
+   * Renegotiate the network path without tearing down the data channels. Only
+   * the side that made the original offer restarts, so the two never collide;
+   * the other side asks it to via a signal.
+   */
+  private async restartIce(link: PeerLink): Promise<void> {
+    if (!this.peers.has(link.id) || link.pc.connectionState === "connected" || link.pc.signalingState === "closed") return;
+    if (!link.initiator) {
+      this.sendSignal({ type: "signal", to: link.id, data: { restart: true } });
+      link.restarts++;
+      return;
+    }
+    link.restarts++;
+    try {
+      const offer = await link.pc.createOffer({ iceRestart: true });
+      await link.pc.setLocalDescription(offer);
+      this.sendSignal({ type: "signal", to: link.id, data: { sdp: link.pc.localDescription } });
+    } catch {
+      /* the next state change tries again or reports */
+    }
+  }
+
+  /** Say why no path was found, from the candidates each side gathered. */
+  private async explainFailure(link: PeerLink): Promise<string> {
+    const { turn } = await loadIce();
+    const local = new Set<string>();
+    const remote = new Set<string>();
+    try {
+      (await link.pc.getStats()).forEach((s: { type: string; candidateType?: string }) => {
+        if (s.type === "local-candidate" && s.candidateType) local.add(s.candidateType);
+        if (s.type === "remote-candidate" && s.candidateType) remote.add(s.candidateType);
+      });
+    } catch {
+      /* closed meanwhile */
+    }
+    const share = " Share the video via Pingvin instead.";
+    if (remote.size === 0) return "Couldn't reach the other device — its network gave no way in." + (turn ? "" : share);
+    if (!local.has("srflx") && !local.has("relay")) return "Your network blocks direct connections (UDP)." + (turn ? "" : share);
+    return turn
+      ? "Couldn't connect, not even through the relay."
+      : "Your networks can't connect directly (common on mobile data)." + share;
+  }
+
   private async acceptSignal(from: string, data: unknown): Promise<void> {
-    const payload = data as { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
+    const payload = data as { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit; restart?: boolean };
     const link = this.peers.get(from) ?? (await this.connectTo(from, false));
 
     try {
-      if (payload.sdp) {
+      if (payload.restart) {
+        if (link.initiator) await this.restartIce(link);
+      } else if (payload.sdp) {
         await link.pc.setRemoteDescription(payload.sdp);
+        for (const candidate of link.pendingCandidates.splice(0)) {
+          await link.pc.addIceCandidate(candidate).catch(() => {});
+        }
         if (payload.sdp.type === "offer") {
           const answer = await link.pc.createAnswer();
           await link.pc.setLocalDescription(answer);
           this.sendSignal({ type: "signal", to: from, data: { sdp: link.pc.localDescription } });
         }
       } else if (payload.candidate) {
-        await link.pc.addIceCandidate(payload.candidate);
+        if (link.pc.remoteDescription) await link.pc.addIceCandidate(payload.candidate);
+        else link.pendingCandidates.push(payload.candidate);
       }
     } catch {
-      // A candidate arriving before the remote description is normal; the
-      // connection recovers on the next one.
+      // A malformed or stale message; the connection state handler recovers.
     }
   }
 
   private dropPeer(id: string): void {
     const link = this.peers.get(id);
     if (!link) return;
+    if (link.disconnectTimer) clearTimeout(link.disconnectTimer);
     this.cb.onPeerLeft?.(id);
     link.control?.close();
     link.view?.close();

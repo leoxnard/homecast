@@ -202,9 +202,10 @@ a WebRTC data channel. The video itself never moves.
   If you host the file on the home server, mind PLAN §2: one master is ~88 GB on
   a single, non-expandable disk that the other containers share.
 
-Connections are direct, so a strict NAT or corporate firewall can prevent one
-forming. There is no TURN relay, because relaying would mean routing your traffic
-through a server.
+Connections are direct, so mobile data, a strict NAT or a corporate firewall can
+prevent one forming. A TURN relay can be switched on for that case
+([docs/deploy.md](docs/deploy.md)). It is off by default, because relaying routes
+your traffic through a server.
 
 ## Deploying
 

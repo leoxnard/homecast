@@ -89,6 +89,25 @@ the host is offline. Downloads go through homecast (Pingvin enables no CORS), an
 resume after interruptions — Pingvin itself cannot serve byte ranges, so homecast
 skips the already-received bytes on the server side.
 
+### Optional: a TURN relay for devices that can't connect directly
+
+Watch-together connects the browsers directly. That fails when a device is on
+mobile data or behind a strict router or firewall, and the room shows "Your
+networks can't connect directly". A TURN relay fixes this. It is off by default,
+because relayed traffic (a video sent "From this browser", too) goes through the
+relay.
+
+- **Cloudflare Realtime TURN** (no ports to open, works behind the tunnel):
+  create a TURN key under *Realtime → TURN Server* in the Cloudflare dashboard,
+  then set `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`. Check
+  Cloudflare's current pricing for relayed data.
+- **Your own coturn** (needs UDP 3478 and a relay port range reachable from the
+  internet, so it can't sit behind a Cloudflare tunnel): run it with
+  `use-auth-secret`, then set `TURN_URLS` (comma-separated) and `TURN_SECRET`.
+
+The server mints credentials that expire after 6 hours, at `/api/ice`. A
+transfer that goes through the relay says "via a relay" next to its speed.
+
 ### Health
 
 The container exposes `/healthz`, which returns `ok`. Coolify's health check uses
